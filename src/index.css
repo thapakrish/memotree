@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #3b82f6; /* Tailwind blue-500 */
+  --color-secondary: #64748b; /* Tailwind slate-500 */
+  --color-background: #f8fafc; /* Tailwind slate-50 */
+}
+
+/* Basic resets and base styling */
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
