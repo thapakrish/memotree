@@ -6,9 +6,12 @@ interface GraphState extends ConversationGraph {
     sessionId: string;
     createdAt: string;
     isHydrated: boolean;
+    mergeSelectionIds: string[];
     hydrateSession: () => Promise<void>;
     createNewSession: () => void;
     loadSessionById: (sessionId: string) => Promise<void>;
+    toggleMergeSelection: (id: string) => void;
+    clearMergeSelection: () => void;
     addNode: (node: Omit<MessageNode, 'id' | 'timestamp'>) => string;
     setActiveNode: (id: string | null) => void;
     updateNodeSummary: (id: string, summary: string) => void;
@@ -37,6 +40,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     ...createEmptySessionState(),
     apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
     isHydrated: false,
+    mergeSelectionIds: [],
 
     hydrateSession: async () => {
         const savedSession = await loadLastSession();
@@ -66,6 +70,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             ...emptyState,
             apiKey: get().apiKey,
             isHydrated: true,
+            mergeSelectionIds: [],
         });
     },
 
@@ -83,8 +88,23 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             createdAt: savedSession.createdAt,
             apiKey: get().apiKey,
             isHydrated: true,
+            mergeSelectionIds: [],
         });
     },
+
+    toggleMergeSelection: (id) => set((state) => {
+        const exists = state.mergeSelectionIds.includes(id);
+        if (exists) {
+            return {
+                mergeSelectionIds: state.mergeSelectionIds.filter((selectedId) => selectedId !== id),
+            };
+        }
+
+        const nextIds = [...state.mergeSelectionIds, id].slice(-2);
+        return { mergeSelectionIds: nextIds };
+    }),
+
+    clearMergeSelection: () => set({ mergeSelectionIds: [] }),
 
     addNode: (nodeData) => {
         const id = crypto.randomUUID();
@@ -101,6 +121,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 nodes: { ...state.nodes, [id]: newNode },
                 rootId: isFirstNode ? id : state.rootId,
                 activeNodeId: id,
+                mergeSelectionIds: [],
             };
         });
 

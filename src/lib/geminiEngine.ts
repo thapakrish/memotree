@@ -121,8 +121,16 @@ function toModelParts(node: MessageNode): Part[] {
         return [{ text: node.content }];
     }
 
+    const prefixParts: Part[] = node.mergeContext
+        ? [{
+            text: `<merge_context>\n${node.mergeContext.envelope}\n</merge_context>`,
+        }]
+        : [];
+
     if (node.events && node.events.length > 0) {
-        return node.events.flatMap<Part>((event) => {
+        return [
+            ...prefixParts,
+            ...node.events.flatMap<Part>((event) => {
             switch (event.kind) {
                 case 'thought':
                     return [{
@@ -143,10 +151,11 @@ function toModelParts(node: MessageNode): Part[] {
                 case 'tool_result':
                     return [];
             }
-        });
+            }),
+        ];
     }
 
-    return [{ text: node.content }];
+    return [...prefixParts, { text: node.content }];
 }
 
 function toGeminiContents(chatPath: MessageNode[]): Content[] {
@@ -154,6 +163,10 @@ function toGeminiContents(chatPath: MessageNode[]): Content[] {
         role: node.role === 'assistant' ? 'model' : 'user',
         parts: toModelParts(node),
     }));
+}
+
+export function buildGeminiContents(chatPath: MessageNode[]): Content[] {
+    return toGeminiContents(chatPath);
 }
 
 function getGenerationConfig(memoryState: string) {

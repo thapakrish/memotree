@@ -47,7 +47,7 @@ export function getFirstThought(events?: ChatEvent[]): ChatEvent | undefined {
     return events?.find((event) => event.kind === 'thought');
 }
 
-export function getNodeSummary(node: Pick<MessageNode, 'role' | 'events' | 'content'>): string {
+export function getNodeSummary(node: Pick<MessageNode, 'role' | 'events' | 'content' | 'kind' | 'mergeContext'>): string {
     if (node.role !== 'assistant') {
         return node.content;
     }
@@ -70,8 +70,12 @@ export function getNodeSummary(node: Pick<MessageNode, 'role' | 'events' | 'cont
     return node.content || 'Tool ran with no user-facing answer';
 }
 
-export function getNodeBadges(node: Pick<MessageNode, 'events' | 'memoryPatches'>): string[] {
+export function getNodeBadges(node: Pick<MessageNode, 'events' | 'memoryPatches' | 'kind' | 'mergeContext'>): string[] {
     const badges = new Set<string>();
+
+    if (node.kind === 'merge' || node.mergeContext) {
+        badges.add('merge');
+    }
 
     for (const event of node.events ?? []) {
         if (event.kind === 'thought') badges.add('thinking');

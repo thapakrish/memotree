@@ -6,16 +6,22 @@ interface CustomNodeProps {
     data: {
         node: MessageNode;
         isActive: boolean;
+        isSelected: boolean;
     };
 }
 
 export function CustomNode({ data }: CustomNodeProps) {
-    const { node, isActive } = data;
+    const { node, isActive, isSelected } = data;
     const badges = getNodeBadges(node);
     const summary = node.summary || getNodeSummary(node);
 
     return (
-        <div className={`p-4 rounded-xl shadow-lg w-[250px] border-2 transition-all cursor-pointer bg-white ${isActive ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-200 hover:border-blue-300'
+        <div className={`p-4 rounded-xl shadow-lg w-[250px] border-2 transition-all cursor-pointer bg-white ${
+            isSelected
+                ? 'border-amber-500 ring-2 ring-amber-200'
+                : isActive
+                    ? 'border-blue-500 ring-2 ring-blue-200'
+                    : 'border-slate-200 hover:border-blue-300'
             }`}>
             <Handle type="target" position={Position.Top} className="w-3 h-3 bg-slate-400" />
 
@@ -42,6 +48,8 @@ export function CustomNode({ data }: CustomNodeProps) {
                                     ? 'bg-emerald-50 text-emerald-700'
                                     : badge === 'tool'
                                         ? 'bg-sky-50 text-sky-700'
+                                        : badge === 'merge'
+                                            ? 'bg-fuchsia-50 text-fuchsia-700'
                                         : badge === 'thinking'
                                             ? 'bg-amber-50 text-amber-700'
                                             : 'bg-rose-50 text-rose-700'
