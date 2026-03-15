@@ -8,6 +8,8 @@ import { useEffect } from 'react';
 
 function App() {
   const {
+    isHydrated,
+    hydrateSession,
     goToParent,
     goToLatestChild,
     nextSibling,
@@ -16,6 +18,14 @@ function App() {
   } = useGraphStore();
 
   useEffect(() => {
+    void hydrateSession();
+  }, [hydrateSession]);
+
+  useEffect(() => {
+    if (!isHydrated) {
+      return;
+    }
+
     const handleGlobalShortcuts = (e: KeyboardEvent) => {
       // Allow default text navigation if typing in an input or textarea
       const target = e.target as HTMLElement;
@@ -63,7 +73,15 @@ function App() {
 
     window.addEventListener('keydown', handleGlobalShortcuts);
     return () => window.removeEventListener('keydown', handleGlobalShortcuts);
-  }, [goToParent, goToLatestChild, nextSibling, prevSibling, goToRoot]);
+  }, [goToParent, goToLatestChild, nextSibling, prevSibling, goToRoot, isHydrated]);
+
+  if (!isHydrated) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-slate-900 text-slate-200">
+        Restoring MemoTree session...
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-900 font-sans">

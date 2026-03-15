@@ -1,27 +1,62 @@
 import { create } from 'zustand';
 import type { MessageNode, ConversationGraph, MemoryPatch } from './types';
+import { deriveSessionTitle, loadLastSession, saveSession } from '../lib/sessionPersistence';
 
 interface GraphState extends ConversationGraph {
+    sessionId: string;
+    createdAt: string;
+    isHydrated: boolean;
+    hydrateSession: () => Promise<void>;
     addNode: (node: Omit<MessageNode, 'id' | 'timestamp'>) => string;
     setActiveNode: (id: string | null) => void;
     updateNodeSummary: (id: string, summary: string) => void;
     addMemoryPatch: (nodeId: string, patch: MemoryPatch) => void;
     getPath: (nodeId: string | null) => MessageNode[];
     setApiKey: (key: string) => void;
-    
-    // Traversal Actions
-    goToParent: () => void; // Undo
-    goToLatestChild: () => void; // Redo (down main path)
-    nextSibling: () => void; // Branch right
-    prevSibling: () => void; // Branch left
+    goToParent: () => void;
+    goToLatestChild: () => void;
+    nextSibling: () => void;
+    prevSibling: () => void;
     goToRoot: () => void;
 }
 
+function createEmptySessionState() {
+    const now = new Date().toISOString();
+    return {
+        nodes: {},
+        rootId: null,
+        activeNodeId: null,
+        sessionId: crypto.randomUUID(),
+        createdAt: now,
+    };
+}
+
 export const useGraphStore = create<GraphState>((set, get) => ({
-    nodes: {},
-    rootId: null,
-    activeNodeId: null,
+    ...createEmptySessionState(),
     apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
+    isHydrated: false,
+
+    hydrateSession: async () => {
+        const savedSession = await loadLastSession();
+
+        if (savedSession) {
+            set({
+                ...savedSession.graph,
+                sessionId: savedSession.id,
+                createdAt: savedSession.createdAt,
+                apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
+                isHydrated: true,
+            });
+            return;
+        }
+
+        const emptyState = createEmptySessionState();
+        set({
+            ...emptyState,
+            apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
+            isHydrated: true,
+        });
+    },
 
     addNode: (nodeData) => {
         const id = crypto.randomUUID();
@@ -37,7 +72,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             return {
                 nodes: { ...state.nodes, [id]: newNode },
                 rootId: isFirstNode ? id : state.rootId,
-                activeNodeId: id, // Automatically switch to new node's timeline
+                activeNodeId: id,
             };
         });
 
@@ -53,8 +88,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         return {
             nodes: {
                 ...state.nodes,
-                [id]: { ...node, summary }
-            }
+                [id]: { ...node, summary },
+            },
         };
     }),
 
@@ -66,9 +101,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 ...state.nodes,
                 [nodeId]: {
                     ...node,
-                    memoryPatches: [...node.memoryPatches, patch]
-                }
-            }
+                    memoryPatches: [...node.memoryPatches, patch],
+                },
+            },
         };
     }),
 
@@ -82,18 +117,14 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     goToLatestChild: () => set((state) => {
         if (!state.activeNodeId) return state;
         const currentId = state.activeNodeId;
-        
-        // Find all children of the current node
         const children = Object.values(state.nodes).filter(
-            n => n.parentId === currentId
+            (node) => node.parentId === currentId,
         );
-        
+
         if (children.length === 0) return state;
 
-        // If there are multiple branches, pick the most recently created one
-        // (timestamp string comparison works for ISO strings)
-        const latestChild = children.reduce((latest, current) => 
-            current.timestamp > latest.timestamp ? current : latest
+        const latestChild = children.reduce((latest, current) =>
+            current.timestamp > latest.timestamp ? current : latest,
         );
 
         return { activeNodeId: latestChild.id };
@@ -104,17 +135,15 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         const currentNode = state.nodes[state.activeNodeId];
         if (!currentNode || !currentNode.parentId) return state;
 
-        // Find all siblings (nodes sharing the same parent)
-        const siblings = Object.values(state.nodes).filter(
-            n => n.parentId === currentNode.parentId
-        ).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+        const siblings = Object.values(state.nodes)
+            .filter((node) => node.parentId === currentNode.parentId)
+            .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
         if (siblings.length <= 1) return state;
 
-        const currentIndex = siblings.findIndex(n => n.id === state.activeNodeId);
-        // Wrap around to the start (or conceptually 'branch right')
+        const currentIndex = siblings.findIndex((node) => node.id === state.activeNodeId);
         const nextIndex = (currentIndex + 1) % siblings.length;
-        
+
         return { activeNodeId: siblings[nextIndex].id };
     }),
 
@@ -123,17 +152,15 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         const currentNode = state.nodes[state.activeNodeId];
         if (!currentNode || !currentNode.parentId) return state;
 
-        // Find all siblings (nodes sharing the same parent)
-        const siblings = Object.values(state.nodes).filter(
-            n => n.parentId === currentNode.parentId
-        ).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+        const siblings = Object.values(state.nodes)
+            .filter((node) => node.parentId === currentNode.parentId)
+            .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
         if (siblings.length <= 1) return state;
 
-        const currentIndex = siblings.findIndex(n => n.id === state.activeNodeId);
-        // Wrap around backward (or conceptually 'branch left')
+        const currentIndex = siblings.findIndex((node) => node.id === state.activeNodeId);
         const prevIndex = (currentIndex - 1 + siblings.length) % siblings.length;
-        
+
         return { activeNodeId: siblings[prevIndex].id };
     }),
 
@@ -154,6 +181,43 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             currentId = nodes[currentId].parentId;
         }
 
-        return path; // Chronological path from root to node (Backward DAG Traversal reversed)
-    }
+        return path;
+    },
 }));
+
+let lastSavedSnapshot = '';
+
+useGraphStore.subscribe((state) => {
+    if (!state.isHydrated) {
+        return;
+    }
+
+    const snapshot = JSON.stringify({
+        sessionId: state.sessionId,
+        nodes: state.nodes,
+        rootId: state.rootId,
+        activeNodeId: state.activeNodeId,
+    });
+
+    if (snapshot === lastSavedSnapshot) {
+        return;
+    }
+
+    lastSavedSnapshot = snapshot;
+
+    void saveSession({
+        id: state.sessionId,
+        createdAt: state.createdAt,
+        updatedAt: new Date().toISOString(),
+        title: deriveSessionTitle({
+            nodes: state.nodes,
+            rootId: state.rootId,
+            activeNodeId: state.activeNodeId,
+        }),
+        graph: {
+            nodes: state.nodes,
+            rootId: state.rootId,
+            activeNodeId: state.activeNodeId,
+        },
+    });
+});
