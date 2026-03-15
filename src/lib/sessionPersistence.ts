@@ -35,6 +35,11 @@ export async function saveSession(session: PersistedSession) {
     await db.put(META_STORE, session.id, LAST_SESSION_KEY);
 }
 
+export async function markLastSession(sessionId: string) {
+    const db = await getDb();
+    await db.put(META_STORE, sessionId, LAST_SESSION_KEY);
+}
+
 export async function loadSession(sessionId: string) {
     const db = await getDb();
     return (await db.get(SESSIONS_STORE, sessionId)) as PersistedSession | undefined;
@@ -48,6 +53,12 @@ export async function loadLastSession() {
     }
 
     return loadSession(lastSessionId);
+}
+
+export async function listSessions() {
+    const db = await getDb();
+    const sessions = (await db.getAll(SESSIONS_STORE)) as PersistedSession[];
+    return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export function deriveSessionTitle(graph: Omit<ConversationGraph, 'apiKey'>): string {

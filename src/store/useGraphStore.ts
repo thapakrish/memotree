@@ -1,12 +1,14 @@
 import { create } from 'zustand';
 import type { MessageNode, ConversationGraph, MemoryPatch } from './types';
-import { deriveSessionTitle, loadLastSession, saveSession } from '../lib/sessionPersistence';
+import { deriveSessionTitle, loadLastSession, loadSession, markLastSession, saveSession } from '../lib/sessionPersistence';
 
 interface GraphState extends ConversationGraph {
     sessionId: string;
     createdAt: string;
     isHydrated: boolean;
     hydrateSession: () => Promise<void>;
+    createNewSession: () => void;
+    loadSessionById: (sessionId: string) => Promise<void>;
     addNode: (node: Omit<MessageNode, 'id' | 'timestamp'>) => string;
     setActiveNode: (id: string | null) => void;
     updateNodeSummary: (id: string, summary: string) => void;
@@ -54,6 +56,32 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         set({
             ...emptyState,
             apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
+            isHydrated: true,
+        });
+    },
+
+    createNewSession: () => {
+        const emptyState = createEmptySessionState();
+        set({
+            ...emptyState,
+            apiKey: get().apiKey,
+            isHydrated: true,
+        });
+    },
+
+    loadSessionById: async (sessionId) => {
+        const savedSession = await loadSession(sessionId);
+        if (!savedSession) {
+            return;
+        }
+
+        await markLastSession(savedSession.id);
+
+        set({
+            ...savedSession.graph,
+            sessionId: savedSession.id,
+            createdAt: savedSession.createdAt,
+            apiKey: get().apiKey,
             isHydrated: true,
         });
     },
