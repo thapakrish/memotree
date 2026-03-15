@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useRef, useState } from 'react';
-import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert } from 'lucide-react';
+import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen } from 'lucide-react';
 import type { Content, FunctionCall, GenerateContentResponse, Part } from '@google/genai';
 import { useGraphStore } from '../store/useGraphStore';
 import type { ChatEvent, MessageNode } from '../store/types';
@@ -16,6 +16,7 @@ import {
 } from '../lib/geminiEngine';
 import { appendEvent, getFinalAnswerText, getNodeSummary, mergeEvents } from '../lib/chatEvents';
 import { reconstructMemory } from '../lib/memoryEngine';
+import { SessionsModal } from './SessionsModal';
 
 function getTextSummary(text: string): string {
     return text.length > 40 ? `${text.slice(0, 40)}...` : text;
@@ -191,6 +192,7 @@ export function ChatView() {
     const [isTyping, setIsTyping] = useState(false);
     const [streamingEvents, setStreamingEvents] = useState<ChatEvent[]>([]);
     const [thoughtsTokenCount, setThoughtsTokenCount] = useState(0);
+    const [isSessionsOpen, setIsSessionsOpen] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
 
     const path = getPath(activeNodeId);
@@ -330,6 +332,13 @@ export function ChatView() {
                     <h1 className="text-xl font-bold tracking-tight text-slate-800">MemoTree</h1>
                     <p className="text-xs font-medium text-slate-400">Time-Traveling LLM Interface</p>
                 </div>
+                <button
+                    onClick={() => setIsSessionsOpen(true)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                >
+                    <FolderOpen className="h-3.5 w-3.5" />
+                    <span>Sessions</span>
+                </button>
             </div>
 
             <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50 scroll-smooth">
@@ -460,6 +469,7 @@ export function ChatView() {
                     </span>
                 </div>
             </div>
+            <SessionsModal isOpen={isSessionsOpen} onClose={() => setIsSessionsOpen(false)} />
         </div>
     );
 }
