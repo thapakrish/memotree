@@ -1,5 +1,6 @@
 import { Handle, Position } from '@xyflow/react';
 import type { MessageNode } from '../store/types';
+import { getNodeBadges, getNodeSummary } from '../lib/chatEvents';
 
 interface CustomNodeProps {
     data: {
@@ -10,6 +11,8 @@ interface CustomNodeProps {
 
 export function CustomNode({ data }: CustomNodeProps) {
     const { node, isActive } = data;
+    const badges = getNodeBadges(node);
+    const summary = node.summary || getNodeSummary(node);
 
     return (
         <div className={`p-4 rounded-xl shadow-lg w-[250px] border-2 transition-all cursor-pointer bg-white ${isActive ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-200 hover:border-blue-300'
@@ -26,13 +29,27 @@ export function CustomNode({ data }: CustomNodeProps) {
             </div>
 
             <p className="text-sm text-slate-700 line-clamp-3">
-                {node.summary || node.content}
+                {summary}
             </p>
 
-            {node.memoryPatches.length > 0 && (
-                <div className="mt-3 pt-2 border-t border-slate-100 flex items-center gap-1">
-                    <div className="w-2 h-2 rounded-full bg-green-500" />
-                    <span className="text-xs text-slate-500 font-medium">Memory Updated</span>
+            {badges.length > 0 && (
+                <div className="mt-3 pt-2 border-t border-slate-100 flex flex-wrap gap-1.5">
+                    {badges.map((badge) => (
+                        <span
+                            key={badge}
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                badge === 'memory'
+                                    ? 'bg-emerald-50 text-emerald-700'
+                                    : badge === 'tool'
+                                        ? 'bg-sky-50 text-sky-700'
+                                        : badge === 'thinking'
+                                            ? 'bg-amber-50 text-amber-700'
+                                            : 'bg-rose-50 text-rose-700'
+                            }`}
+                        >
+                            {badge}
+                        </span>
+                    ))}
                 </div>
             )}
 

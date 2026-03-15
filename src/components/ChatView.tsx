@@ -1,12 +1,12 @@
 import { startTransition, useEffect, useRef, useState } from 'react';
-import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit } from 'lucide-react';
-import type { FunctionCall } from '@google/genai';
+import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert } from 'lucide-react';
+import type { Content, FunctionCall, GenerateContentResponse, Part } from '@google/genai';
 import { useGraphStore } from '../store/useGraphStore';
-import type { AssistantContentPart, MessageNode } from '../store/types';
+import type { ChatEvent, MessageNode } from '../store/types';
 import {
     createFunctionResponseContent,
     createModelToolCallContent,
-    extractAssistantParts,
+    extractAssistantEvents,
     extractFunctionCalls,
     extractThoughtsTokenCount,
     generateGeminiResponseStream,
@@ -14,42 +14,10 @@ import {
     getAssistantText,
     interceptMemoryTool,
 } from '../lib/geminiEngine';
+import { appendEvent, getFinalAnswerText, getNodeSummary, mergeEvents } from '../lib/chatEvents';
 import { reconstructMemory } from '../lib/memoryEngine';
 
-function mergeAssistantParts(
-    currentParts: AssistantContentPart[],
-    nextParts: AssistantContentPart[],
-): AssistantContentPart[] {
-    const merged = [...currentParts];
-
-    for (const part of nextParts) {
-        if (!part.text) {
-            continue;
-        }
-
-        const previous = merged.at(-1);
-        if (
-            previous &&
-            previous.kind === part.kind &&
-            previous.signature === part.signature
-        ) {
-            merged[merged.length - 1] = {
-                ...previous,
-                text: previous.text + part.text,
-            };
-        } else {
-            merged.push(part);
-        }
-    }
-
-    return merged;
-}
-
 function getTextSummary(text: string): string {
-    if (!text) {
-        return 'Tool Execution';
-    }
-
     return text.length > 40 ? `${text.slice(0, 40)}...` : text;
 }
 
@@ -68,21 +36,50 @@ function normalizeToolArgs(args: unknown): Record<string, string> {
     return normalized;
 }
 
+function toReplayParts(msg: MessageNode) {
+    if (msg.role !== 'assistant') {
+        return [{ text: msg.content }] as Part[];
+    }
+
+    return (msg.events ?? []).flatMap<Part>((event) => {
+        switch (event.kind) {
+            case 'thought':
+                return [{
+                    text: event.text,
+                    thought: true as const,
+                    thoughtSignature: event.signature,
+                }];
+            case 'text':
+                return [{ text: event.text }];
+            case 'tool_call':
+                return [{
+                    functionCall: {
+                        id: event.callId,
+                        name: event.toolName,
+                        args: event.args,
+                    },
+                }];
+            case 'tool_result':
+                return [];
+            }
+        });
+}
+
 async function collectStreamedAssistantResponse(
-    stream: AsyncGenerator<import('@google/genai').GenerateContentResponse>,
-    setStreamingParts: (parts: AssistantContentPart[]) => void,
+    stream: AsyncGenerator<GenerateContentResponse>,
+    setStreamingEvents: (events: ChatEvent[]) => void,
     setThoughtsTokenCount: (count: number) => void,
 ) {
-    let assistantParts: AssistantContentPart[] = [];
+    let events: ChatEvent[] = [];
     let maxThoughtsTokenCount = 0;
     const functionCalls = new Map<string, FunctionCall>();
 
     for await (const chunk of stream) {
-        const chunkParts = extractAssistantParts(chunk);
-        if (chunkParts.length > 0) {
-            assistantParts = mergeAssistantParts(assistantParts, chunkParts);
+        const chunkEvents = extractAssistantEvents(chunk);
+        if (chunkEvents.length > 0) {
+            events = mergeEvents(events, chunkEvents);
             startTransition(() => {
-                setStreamingParts(assistantParts);
+                setStreamingEvents(events);
             });
         }
 
@@ -105,62 +102,85 @@ async function collectStreamedAssistantResponse(
     }
 
     return {
-        assistantParts,
+        events,
         thoughtsTokenCount: maxThoughtsTokenCount,
         functionCalls: [...functionCalls.values()],
     };
 }
 
 function AssistantMessageBody({
-    parts,
+    events,
     fallbackText,
-    thoughtsTokenCount,
 }: {
-    parts?: AssistantContentPart[];
+    events?: ChatEvent[];
     fallbackText: string;
-    thoughtsTokenCount?: number;
 }) {
-    const messageParts = parts ?? [];
-    const hasRenderedParts = messageParts.some((part) => part.text.trim().length > 0);
+    const messageEvents = events ?? [];
 
-    if (!hasRenderedParts) {
+    if (messageEvents.length === 0) {
         return <div className="whitespace-pre-wrap">{fallbackText}</div>;
     }
 
     return (
         <div className="space-y-3">
-            {messageParts.map((part, index) => (
-                part.kind === 'thought' ? (
-                    <details
-                        key={`${part.kind}-${part.signature ?? index}-${index}`}
-                        className="group rounded-xl border border-amber-200 bg-amber-50/80"
-                    >
-                        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700 marker:content-none">
-                            <BrainCircuit className="h-3.5 w-3.5" />
-                            <span className="flex-1">
-                                Thinking
-                                {index === 0 && thoughtsTokenCount ? ` · ${thoughtsTokenCount.toLocaleString()} tokens` : ''}
-                            </span>
-                            <span className="text-[10px] normal-case tracking-normal text-amber-600 group-open:hidden">
-                                Show
-                            </span>
-                            <span className="hidden text-[10px] normal-case tracking-normal text-amber-600 group-open:inline">
-                                Hide
-                            </span>
-                        </summary>
-                        <div className="border-t border-amber-200 px-3 py-3 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
-                            {part.text}
-                        </div>
-                    </details>
-                ) : (
-                    <div
-                        key={`${part.kind}-${index}`}
-                        className="whitespace-pre-wrap"
-                    >
-                        {part.text}
-                    </div>
-                )
-            ))}
+            {messageEvents.map((event, index) => {
+                switch (event.kind) {
+                    case 'thought':
+                        return (
+                            <details
+                                key={`${event.kind}-${event.signature ?? index}-${index}`}
+                                className="group rounded-xl border border-amber-200 bg-amber-50/80"
+                            >
+                                <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700 marker:content-none">
+                                    <BrainCircuit className="h-3.5 w-3.5" />
+                                    <span className="flex-1">
+                                        Thinking
+                                        {event.tokenCount ? ` · ${event.tokenCount.toLocaleString()} tokens` : ''}
+                                    </span>
+                                    <span className="text-[10px] normal-case tracking-normal text-amber-600 group-open:hidden">Show</span>
+                                    <span className="hidden text-[10px] normal-case tracking-normal text-amber-600 group-open:inline">Hide</span>
+                                </summary>
+                                <div className="border-t border-amber-200 px-3 py-3 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+                                    {event.text}
+                                </div>
+                            </details>
+                        );
+                    case 'tool_call':
+                        return (
+                            <div key={`${event.kind}-${event.callId ?? index}`} className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                                <div className="flex items-center gap-2 font-medium">
+                                    <Wrench className="h-3.5 w-3.5" />
+                                    <span>{event.toolName}</span>
+                                </div>
+                                <div className="mt-1 text-xs text-sky-700 whitespace-pre-wrap">
+                                    {JSON.stringify(event.args, null, 2)}
+                                </div>
+                            </div>
+                        );
+                    case 'tool_result':
+                        return (
+                            <details key={`${event.kind}-${event.callId ?? index}`} className="group rounded-xl border border-emerald-200 bg-emerald-50/80">
+                                <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-700 marker:content-none">
+                                    {event.status === 'success' ? <CheckCircle2 className="h-3.5 w-3.5" /> : <CircleAlert className="h-3.5 w-3.5" />}
+                                    <span className="flex-1">{event.summary}</span>
+                                    <span className="text-[10px] normal-case tracking-normal text-emerald-600 group-open:hidden">Show</span>
+                                    <span className="hidden text-[10px] normal-case tracking-normal text-emerald-600 group-open:inline">Hide</span>
+                                </summary>
+                                {event.payload !== undefined && (
+                                    <pre className="overflow-x-auto border-t border-emerald-200 px-3 py-3 text-xs leading-relaxed text-emerald-900 whitespace-pre-wrap">
+                                        {JSON.stringify(event.payload, null, 2)}
+                                    </pre>
+                                )}
+                            </details>
+                        );
+                    case 'text':
+                        return (
+                            <div key={`${event.kind}-${index}`} className="whitespace-pre-wrap">
+                                {event.text}
+                            </div>
+                        );
+                }
+            })}
         </div>
     );
 }
@@ -169,7 +189,7 @@ export function ChatView() {
     const { activeNodeId, getPath, addNode, setActiveNode, apiKey, setApiKey } = useGraphStore();
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
-    const [streamingParts, setStreamingParts] = useState<AssistantContentPart[]>([]);
+    const [streamingEvents, setStreamingEvents] = useState<ChatEvent[]>([]);
     const [thoughtsTokenCount, setThoughtsTokenCount] = useState(0);
     const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -179,7 +199,7 @@ export function ChatView() {
         if (scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
-    }, [streamingParts, isTyping, path.length]);
+    }, [streamingEvents, isTyping, path.length]);
 
     const handleSend = async () => {
         if (!input.trim() || !apiKey) return;
@@ -197,7 +217,7 @@ export function ChatView() {
 
         setInput('');
         setIsTyping(true);
-        setStreamingParts([]);
+        setStreamingEvents([]);
         setThoughtsTokenCount(0);
 
         try {
@@ -206,30 +226,45 @@ export function ChatView() {
             const initialStream = await generateGeminiResponseStream(newPath, memoryState, apiKey);
             const initialResponse = await collectStreamedAssistantResponse(
                 initialStream,
-                setStreamingParts,
+                setStreamingEvents,
                 setThoughtsTokenCount,
             );
 
-            let assistantParts = initialResponse.assistantParts;
-            let maxThoughtsTokenCount = initialResponse.thoughtsTokenCount;
-
+            let events = initialResponse.events;
             let nextMemoryState = memoryState;
             const patches = [];
             const functionResponses: Array<{ id?: string; name: string; response: Record<string, unknown> }> = [];
 
             for (const call of initialResponse.functionCalls) {
                 if (call.name === 'text_editor') {
+                    const toolArgs = normalizeToolArgs(call.args);
                     const { patch, updatedMemory } = interceptMemoryTool(
-                        normalizeToolArgs(call.args),
+                        toolArgs,
                         nextMemoryState,
                     );
                     patches.push(patch);
                     nextMemoryState = updatedMemory;
+
+                    const toolResultEvent: ChatEvent = {
+                        kind: 'tool_result',
+                        toolName: call.name,
+                        callId: call.id,
+                        status: 'success',
+                        summary: `Updated ${toolArgs.path ?? '/memories/facts.json'}`,
+                        payload: {
+                            path: toolArgs.path ?? '/memories/facts.json',
+                            fileText: updatedMemory,
+                        },
+                    };
+
+                    events = appendEvent(events, toolResultEvent);
+                    setStreamingEvents(events);
+
                     functionResponses.push({
                         id: call.id,
                         name: call.name,
                         response: {
-                            output: `Updated ${normalizeToolArgs(call.args).path ?? '/memories/facts.json'}`,
+                            output: toolResultEvent.summary,
                             fileText: updatedMemory,
                         },
                     });
@@ -237,22 +272,14 @@ export function ChatView() {
             }
 
             if (initialResponse.functionCalls.length > 0 && functionResponses.length > 0) {
-                const followUpContents = [
+                const followUpContents: Content[] = [
                     ...newPath.map((node) => ({
                         role: node.role === 'assistant' ? 'model' : 'user',
-                        parts: node.role === 'assistant' && node.assistantParts
-                            ? node.assistantParts.map((part) => ({
-                                text: part.text,
-                                thought: part.kind === 'thought' ? true : undefined,
-                                thoughtSignature: part.signature,
-                            }))
-                            : [{ text: node.content }],
+                        parts: toReplayParts(node),
                     })),
-                    createModelToolCallContent(assistantParts, initialResponse.functionCalls),
+                    createModelToolCallContent(events, initialResponse.functionCalls),
                     createFunctionResponseContent(functionResponses),
                 ];
-
-                setStreamingParts(assistantParts);
 
                 const followUpStream = await generateGeminiResponseStreamFromContents(
                     followUpContents,
@@ -261,37 +288,40 @@ export function ChatView() {
                 );
                 const followUpResponse = await collectStreamedAssistantResponse(
                     followUpStream,
-                    setStreamingParts,
+                    setStreamingEvents,
                     setThoughtsTokenCount,
                 );
 
-                assistantParts = mergeAssistantParts(assistantParts, followUpResponse.assistantParts);
-                maxThoughtsTokenCount = Math.max(
-                    maxThoughtsTokenCount,
-                    followUpResponse.thoughtsTokenCount,
-                );
+                events = mergeEvents(events, followUpResponse.events);
             }
 
-            const assistantText = getAssistantText(assistantParts);
+            const assistantText = getAssistantText(events) || 'Tool ran with no user-facing answer';
 
             addNode({
                 parentId: userNodeId,
                 role: 'assistant',
-                content: assistantText || 'Processed tool call.',
-                assistantParts,
-                thoughtsTokenCount: maxThoughtsTokenCount,
+                content: assistantText,
+                events,
                 memoryPatches: patches,
-                summary: getTextSummary(assistantText),
+                summary: getNodeSummary({ role: 'assistant', events, content: assistantText }),
             });
         } catch (err) {
             console.error(err);
             alert('API request failed. Check API Key or console.');
         } finally {
             setIsTyping(false);
-            setStreamingParts([]);
+            setStreamingEvents([]);
             setThoughtsTokenCount(0);
         }
     };
+
+    const streamingDisplayEvents = streamingEvents.length > 0
+        ? streamingEvents.map((event) => (
+            event.kind === 'thought' && !event.tokenCount && thoughtsTokenCount
+                ? { ...event, tokenCount: thoughtsTokenCount }
+                : event
+        ))
+        : [];
 
     return (
         <div className="w-full h-full flex flex-col bg-white border-r border-slate-200 shadow-sm z-20">
@@ -335,9 +365,8 @@ export function ChatView() {
                             >
                                 {msg.role === 'assistant' ? (
                                     <AssistantMessageBody
-                                        parts={msg.assistantParts}
+                                        events={msg.events}
                                         fallbackText={msg.content}
-                                        thoughtsTokenCount={msg.thoughtsTokenCount}
                                     />
                                 ) : (
                                     <div className="whitespace-pre-wrap">{msg.content}</div>
@@ -367,11 +396,10 @@ export function ChatView() {
                             <span className="text-xs font-semibold text-purple-600">Gemini</span>
                         </div>
                         <div className="p-4 rounded-2xl shadow-sm text-[15px] leading-relaxed relative bg-white border border-slate-200 text-slate-800 rounded-tl-sm w-full">
-                            {streamingParts.length > 0 ? (
+                            {streamingDisplayEvents.length > 0 ? (
                                 <AssistantMessageBody
-                                    parts={streamingParts}
-                                    fallbackText=""
-                                    thoughtsTokenCount={thoughtsTokenCount}
+                                    events={streamingDisplayEvents}
+                                    fallbackText={getFinalAnswerText(streamingDisplayEvents)}
                                 />
                             ) : (
                                 <div className="flex items-center gap-2 text-slate-400 h-6">

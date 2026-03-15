@@ -3,19 +3,38 @@ export interface MemoryPatch {
     diffText: string;
 }
 
-export interface AssistantContentPart {
-    kind: 'thought' | 'text';
-    text: string;
-    signature?: string;
-}
+export type ChatEvent =
+    | {
+        kind: 'thought';
+        text: string;
+        signature?: string;
+        tokenCount?: number;
+    }
+    | {
+        kind: 'tool_call';
+        toolName: string;
+        callId?: string;
+        args: Record<string, unknown>;
+    }
+    | {
+        kind: 'tool_result';
+        toolName: string;
+        callId?: string;
+        status: 'success' | 'error';
+        summary: string;
+        payload?: unknown;
+    }
+    | {
+        kind: 'text';
+        text: string;
+    };
 
 export interface MessageNode {
     id: string;
     parentId: string | null;
     role: 'user' | 'assistant' | 'system';
     content: string;
-    assistantParts?: AssistantContentPart[];
-    thoughtsTokenCount?: number;
+    events?: ChatEvent[];
     memoryPatches: MemoryPatch[];
     timestamp: string; // ISO string
     summary?: string;

@@ -9,8 +9,9 @@ import {
     createPartFromFunctionResponse,
     createUserContent,
 } from '@google/genai';
-import type { AssistantContentPart, MessageNode, MemoryPatch } from '../store/types';
+import type { ChatEvent, MessageNode, MemoryPatch } from '../store/types';
 import { computePatch } from './memoryEngine';
+import { getFinalAnswerText } from './chatEvents';
 
 let geminiClient: GoogleGenAI | null = null;
 let activeApiKey: string | null = null;
@@ -76,36 +77,33 @@ export function interceptMemoryTool(
     };
 }
 
-function appendAssistantPart(parts: AssistantContentPart[], nextPart: AssistantContentPart): AssistantContentPart[] {
-    if (!nextPart.text) {
-        return parts;
-    }
-
-    const previous = parts.at(-1);
-    if (
-        previous &&
-        previous.kind === nextPart.kind &&
-        previous.signature === nextPart.signature
-    ) {
-        previous.text += nextPart.text;
-        return [...parts.slice(0, -1), previous];
-    }
-
-    return [...parts, nextPart];
-}
-
-export function extractAssistantParts(response: GenerateContentResponse): AssistantContentPart[] {
+export function extractAssistantEvents(response: GenerateContentResponse): ChatEvent[] {
     const parts = response.candidates?.[0]?.content?.parts ?? [];
-    return parts.reduce<AssistantContentPart[]>((acc, part) => {
-        if (!part.text) {
-            return acc;
+    return parts.reduce<ChatEvent[]>((acc, part) => {
+        if (part.text) {
+            acc.push(
+                part.thought
+                    ? {
+                        kind: 'thought',
+                        text: part.text,
+                        signature: part.thoughtSignature,
+                        tokenCount: response.usageMetadata?.thoughtsTokenCount,
+                    }
+                    : {
+                        kind: 'text',
+                        text: part.text,
+                    },
+            );
         }
-
-        return appendAssistantPart(acc, {
-            kind: part.thought ? 'thought' : 'text',
-            text: part.text,
-            signature: part.thought ? part.thoughtSignature : undefined,
-        });
+        if (part.functionCall?.name) {
+            acc.push({
+                kind: 'tool_call',
+                toolName: part.functionCall.name,
+                callId: part.functionCall.id,
+                args: part.functionCall.args ?? {},
+            });
+        }
+        return acc;
     }, []);
 }
 
@@ -118,25 +116,34 @@ export function extractThoughtsTokenCount(response: GenerateContentResponse): nu
     return response.usageMetadata?.thoughtsTokenCount ?? 0;
 }
 
-export function getAssistantText(parts: AssistantContentPart[]): string {
-    return parts
-        .filter((part) => part.kind === 'text')
-        .map((part) => part.text)
-        .join('')
-        .trim();
-}
-
 function toModelParts(node: MessageNode): Part[] {
     if (node.role !== 'assistant') {
         return [{ text: node.content }];
     }
 
-    if (node.assistantParts && node.assistantParts.length > 0) {
-        return node.assistantParts.map((part) => ({
-            text: part.text,
-            thought: part.kind === 'thought' ? true : undefined,
-            thoughtSignature: part.signature,
-        }));
+    if (node.events && node.events.length > 0) {
+        return node.events.flatMap<Part>((event) => {
+            switch (event.kind) {
+                case 'thought':
+                    return [{
+                        text: event.text,
+                        thought: true,
+                        thoughtSignature: event.signature,
+                    }];
+                case 'text':
+                    return [{ text: event.text }];
+                case 'tool_call':
+                    return [{
+                        functionCall: {
+                            id: event.callId,
+                            name: event.toolName,
+                            args: event.args,
+                        },
+                    }];
+                case 'tool_result':
+                    return [];
+            }
+        });
     }
 
     return [{ text: node.content }];
@@ -194,15 +201,25 @@ export async function generateGeminiResponseStream(
 }
 
 export function createModelToolCallContent(
-    assistantParts: AssistantContentPart[],
+    events: ChatEvent[],
     functionCalls: FunctionCall[],
 ): Content {
     const parts: Part[] = [
-        ...assistantParts.map((part) => ({
-            text: part.text,
-            thought: part.kind === 'thought' ? true : undefined,
-            thoughtSignature: part.signature,
-        })),
+        ...events.flatMap<Part>((event) => {
+            switch (event.kind) {
+                case 'thought':
+                    return [{
+                        text: event.text,
+                        thought: true,
+                        thoughtSignature: event.signature,
+                    }];
+                case 'text':
+                    return [{ text: event.text }];
+                case 'tool_call':
+                case 'tool_result':
+                    return [];
+            }
+        }),
         ...functionCalls.map((call) => ({
             functionCall: {
                 id: call.id,
@@ -225,4 +242,8 @@ export function createFunctionResponseContent(
     ));
 
     return createUserContent(parts);
+}
+
+export function getAssistantText(events: ChatEvent[]): string {
+    return getFinalAnswerText(events);
 }
