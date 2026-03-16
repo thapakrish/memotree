@@ -51,10 +51,20 @@ export interface MergeContext {
     envelope: string;
 }
 
+export interface ContextGroup {
+    id: string;
+    name: string;
+    color: string;
+    contextMode: 'full' | 'compact' | 'result_only' | 'exclude';
+    summary?: string;
+    nodeIds: string[];
+}
+
 export interface MessageNode {
     id: string;
     parentId: string | null;
     parentIds?: string[];
+    groupIds?: string[];
     kind?: 'message' | 'merge';
     role: 'user' | 'assistant' | 'system';
     content: string;
@@ -67,6 +77,7 @@ export interface MessageNode {
 
 export interface ConversationGraph {
     nodes: Record<string, MessageNode>;
+    groups: Record<string, ContextGroup>;
     rootId: string | null;
     activeNodeId: string | null;
     apiKey: string | null;

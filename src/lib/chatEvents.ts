@@ -83,7 +83,7 @@ export function getNodeBadges(node: Pick<MessageNode, 'events' | 'memoryPatches'
         if (event.kind === 'tool_result' && event.status === 'error') badges.add('error');
     }
 
-    if (node.memoryPatches.length > 0) badges.add('memory');
+    if ((node.memoryPatches?.length ?? 0) > 0) badges.add('memory');
 
     return [...badges];
 }

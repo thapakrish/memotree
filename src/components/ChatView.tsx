@@ -390,7 +390,7 @@ export function ChatView() {
                                 </button>
                             </div>
 
-                            {msg.memoryPatches.length > 0 && (
+                            {(msg.memoryPatches?.length ?? 0) > 0 && (
                                 <div className="mt-2 text-[11px] font-mono text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100 self-start">
                                     + Memory Patched
                                 </div>

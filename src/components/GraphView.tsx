@@ -9,14 +9,16 @@ import {
     type Node,
     type Edge,
     MarkerType,
+    SelectionMode,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-import { GitMerge } from 'lucide-react';
+import { FolderTree, GitMerge, MousePointer2, SquareDashedMousePointer } from 'lucide-react';
 import { useGraphStore } from '../store/useGraphStore';
 import { CustomNode } from './CustomNode';
 import { getLayoutedElements } from '../lib/layout';
 import { MergeBranchesModal } from './MergeBranchesModal';
+import { GroupNodesModal } from './GroupNodesModal';
 import { buildGeminiContents, generateGeminiResponseStreamFromContents, getAssistantText } from '../lib/geminiEngine';
 import { buildMergeContext, buildMergeRequestContents, isMergeableAssistant } from '../lib/mergeContext';
 import { getNodeSummary, mergeEvents } from '../lib/chatEvents';
@@ -30,19 +32,25 @@ const nodeTypes = {
 export function GraphView() {
     const {
         nodes: storeNodes,
+        groups: storeGroups,
         activeNodeId,
         apiKey,
-        mergeSelectionIds,
+        selectedNodeIds,
         setActiveNode,
-        toggleMergeSelection,
-        clearMergeSelection,
+        toggleNodeSelection,
+        setSelectedNodeIds,
+        clearNodeSelection,
+        createGroup,
         addNode,
     } = useGraphStore();
 
     const [rfNodes, setNodes, onNodesChange] = useNodesState<Node>([]);
     const [rfEdges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
     const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+    const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
     const [isMerging, setIsMerging] = useState(false);
+    const [isGrouping, setIsGrouping] = useState(false);
+    const [isSelectionMode, setIsSelectionMode] = useState(false);
     const { setCenter } = useReactFlow();
 
     useEffect(() => {
@@ -54,10 +62,12 @@ export function GraphView() {
                 id: node.id,
                 type: 'custom',
                 position: { x: 0, y: 0 },
+                selected: selectedNodeIds.includes(node.id),
                 data: {
                     node,
                     isActive: node.id === activeNodeId,
-                    isSelected: mergeSelectionIds.includes(node.id),
+                    isSelected: selectedNodeIds.includes(node.id),
+                    groups: (node.groupIds ?? []).map((groupId) => storeGroups[groupId]).filter(Boolean),
                 },
             });
 
@@ -89,7 +99,7 @@ export function GraphView() {
         const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(rawNodes, rawEdges);
         setNodes(layoutedNodes);
         setEdges(layoutedEdges);
-    }, [storeNodes, activeNodeId, mergeSelectionIds, setNodes, setEdges]);
+    }, [storeNodes, storeGroups, activeNodeId, selectedNodeIds, setNodes, setEdges]);
 
     useEffect(() => {
         if (activeNodeId && rfNodes.length > 0) {
@@ -102,19 +112,62 @@ export function GraphView() {
         }
     }, [activeNodeId, rfNodes, setCenter]);
 
+    useEffect(() => {
+        const handleSelectionShortcuts = (event: KeyboardEvent) => {
+            const target = event.target as HTMLElement | null;
+            if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+                return;
+            }
+
+            if (event.key === 'Escape') {
+                clearNodeSelection();
+                setIsSelectionMode(false);
+                return;
+            }
+
+            if (event.key.toLowerCase() === 'v') {
+                event.preventDefault();
+                setIsSelectionMode((current) => !current);
+            }
+        };
+
+        window.addEventListener('keydown', handleSelectionShortcuts);
+        return () => window.removeEventListener('keydown', handleSelectionShortcuts);
+    }, [clearNodeSelection]);
+
     const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
-        if (event.shiftKey || event.metaKey || event.ctrlKey) {
-            toggleMergeSelection(node.id);
+        if (isSelectionMode) {
+            toggleNodeSelection(node.id);
             return;
         }
 
-        setActiveNode(node.id);
-    }, [setActiveNode, toggleMergeSelection]);
+        if (event.shiftKey || event.metaKey || event.ctrlKey) {
+            toggleNodeSelection(node.id);
+            return;
+        }
 
-    const selectedNodes = mergeSelectionIds
+        clearNodeSelection();
+        setActiveNode(node.id);
+    }, [clearNodeSelection, isSelectionMode, setActiveNode, toggleNodeSelection]);
+
+    const handleSelectionModeToggle = () => {
+        setIsSelectionMode((current) => {
+            if (current) {
+                clearNodeSelection();
+            }
+            return !current;
+        });
+    };
+
+    const handleClearSelection = () => {
+        clearNodeSelection();
+    };
+
+    const selectedNodes = selectedNodeIds
         .map((id) => storeNodes[id])
         .filter(Boolean);
     const canMergeSelected = selectedNodes.length === 2 && selectedNodes.every(isMergeableAssistant) && !!apiKey;
+    const canGroupSelected = selectedNodes.length > 0;
 
     const handleMergeSubmit = async (instruction: string, mode: MergeContextMode) => {
         if (!apiKey || selectedNodes.length !== 2) {
@@ -183,10 +236,33 @@ export function GraphView() {
             });
 
             setActiveNode(mergeNodeId);
-            clearMergeSelection();
+            clearNodeSelection();
             setIsMergeModalOpen(false);
         } finally {
             setIsMerging(false);
+        }
+    };
+
+    const handleGroupSubmit = ({
+        name,
+        color,
+        contextMode,
+    }: {
+        name: string;
+        color: string;
+        contextMode: 'full' | 'compact' | 'result_only' | 'exclude';
+    }) => {
+        setIsGrouping(true);
+        try {
+            createGroup({
+                name,
+                color,
+                contextMode,
+                nodeIds: selectedNodes.map((node) => node.id),
+            });
+            setIsGroupModalOpen(false);
+        } finally {
+            setIsGrouping(false);
         }
     };
 
@@ -197,12 +273,38 @@ export function GraphView() {
                     Memory Tree Map
                 </div>
                 <button
+                    onClick={handleSelectionModeToggle}
+                    className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold shadow-sm transition-colors ${
+                        isSelectionMode
+                            ? 'border-blue-300 bg-blue-50 text-blue-700'
+                            : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700'
+                    }`}
+                >
+                    {isSelectionMode ? <SquareDashedMousePointer className="h-4 w-4" /> : <MousePointer2 className="h-4 w-4" />}
+                    <span>{isSelectionMode ? 'Selecting Nodes' : 'Select Nodes'}</span>
+                </button>
+                <button
+                    onClick={handleClearSelection}
+                    disabled={selectedNodeIds.length === 0}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    <span>Clear Selection</span>
+                </button>
+                <button
                     onClick={() => setIsMergeModalOpen(true)}
                     disabled={!canMergeSelected}
                     className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-fuchsia-300 hover:bg-fuchsia-50 hover:text-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                     <GitMerge className="h-4 w-4" />
                     <span>Merge Selected</span>
+                </button>
+                <button
+                    onClick={() => setIsGroupModalOpen(true)}
+                    disabled={!canGroupSelected}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    <FolderTree className="h-4 w-4" />
+                    <span>Group Selected</span>
                 </button>
             </div>
             <ReactFlow
@@ -211,7 +313,21 @@ export function GraphView() {
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onNodeClick={onNodeClick}
+                onPaneClick={clearNodeSelection}
+                onSelectionChange={({ nodes: selectedFlowNodes }) => {
+                    if (!isSelectionMode) {
+                        return;
+                    }
+
+                    setSelectedNodeIds(selectedFlowNodes.map((node) => node.id));
+                }}
                 nodeTypes={nodeTypes}
+                elementsSelectable={isSelectionMode}
+                selectionKeyCode={null}
+                selectionOnDrag={isSelectionMode}
+                selectionMode={SelectionMode.Partial}
+                multiSelectionKeyCode={null}
+                panOnDrag={!isSelectionMode}
                 fitView
             >
                 <Background />
@@ -224,6 +340,13 @@ export function GraphView() {
                 isSubmitting={isMerging}
                 onClose={() => setIsMergeModalOpen(false)}
                 onSubmit={handleMergeSubmit}
+            />
+            <GroupNodesModal
+                isOpen={isGroupModalOpen}
+                selectedCount={selectedNodes.length}
+                isSubmitting={isGrouping}
+                onClose={() => setIsGroupModalOpen(false)}
+                onSubmit={handleGroupSubmit}
             />
         </div>
     );

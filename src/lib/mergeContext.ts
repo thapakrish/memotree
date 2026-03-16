@@ -39,7 +39,7 @@ function getArtifactLines(node: MessageNode): string[] {
         }
     }
 
-    if (node.memoryPatches.length > 0) {
+    if ((node.memoryPatches?.length ?? 0) > 0) {
         artifactLines.push(`memory updates: ${node.memoryPatches.length}`);
     }
 

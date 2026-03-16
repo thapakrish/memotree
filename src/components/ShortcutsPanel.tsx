@@ -89,6 +89,42 @@ export function ShortcutsPanel() {
                     </div>
                 </div>
 
+                <div className="my-1 border-t border-slate-100 w-full" />
+
+                <div className="flex items-center justify-between px-2 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
+                    <span>Toggle Select Mode</span>
+                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
+                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-100 border border-slate-200 text-[11px] font-sans font-medium text-slate-500 shadow-sm">V</kbd>
+                    </div>
+                </div>
+
+                <div className="flex items-center justify-between px-2 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
+                    <span>Box Select Nodes</span>
+                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
+                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-100 border border-slate-200 text-[11px] font-sans font-medium text-slate-500 shadow-sm">V</kbd>
+                        <span className="text-slate-300 text-[10px] mx-0.5">+</span>
+                        <kbd className="flex items-center justify-center h-5 px-1.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-sans font-medium text-slate-500 shadow-sm">Drag</kbd>
+                    </div>
+                </div>
+
+                <div className="flex items-center justify-between px-2 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
+                    <span>Add to Selection</span>
+                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
+                        <kbd className="flex items-center justify-center h-5 px-1.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-sans font-medium text-slate-500 shadow-sm">Shift</kbd>
+                        <span className="text-slate-300 text-[10px]">or</span>
+                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-100 border border-slate-200 text-xs font-mono text-slate-500 shadow-sm"><Command className="w-3 h-3" /></kbd>
+                        <span className="text-slate-300 text-[10px] mx-0.5">+</span>
+                        <kbd className="flex items-center justify-center h-5 px-1.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-sans font-medium text-slate-500 shadow-sm">Click</kbd>
+                    </div>
+                </div>
+
+                <div className="flex items-center justify-between px-2 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
+                    <span>Clear Selection</span>
+                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
+                        <kbd className="flex items-center justify-center h-5 px-1.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-sans font-medium text-slate-500 shadow-sm">Esc</kbd>
+                    </div>
+                </div>
+
             </div>
         </div>
     );

@@ -1,17 +1,19 @@
 import { create } from 'zustand';
-import type { MessageNode, ConversationGraph, MemoryPatch } from './types';
+import type { ContextGroup, MessageNode, ConversationGraph, MemoryPatch } from './types';
 import { deriveSessionTitle, loadLastSession, loadSession, markLastSession, saveSession } from '../lib/sessionPersistence';
 
 interface GraphState extends ConversationGraph {
     sessionId: string;
     createdAt: string;
     isHydrated: boolean;
-    mergeSelectionIds: string[];
+    selectedNodeIds: string[];
     hydrateSession: () => Promise<void>;
     createNewSession: () => void;
     loadSessionById: (sessionId: string) => Promise<void>;
-    toggleMergeSelection: (id: string) => void;
-    clearMergeSelection: () => void;
+    toggleNodeSelection: (id: string) => void;
+    setSelectedNodeIds: (ids: string[]) => void;
+    clearNodeSelection: () => void;
+    createGroup: (group: Omit<ContextGroup, 'id'>) => string;
     addNode: (node: Omit<MessageNode, 'id' | 'timestamp'>) => string;
     setActiveNode: (id: string | null) => void;
     updateNodeSummary: (id: string, summary: string) => void;
@@ -29,6 +31,7 @@ function createEmptySessionState() {
     const now = new Date().toISOString();
     return {
         nodes: {},
+        groups: {},
         rootId: null,
         activeNodeId: null,
         sessionId: crypto.randomUUID(),
@@ -36,11 +39,21 @@ function createEmptySessionState() {
     };
 }
 
+function areNodeSelectionsEqual(left: string[], right: string[]) {
+    if (left.length !== right.length) {
+        return false;
+    }
+
+    const normalizedLeft = [...left].sort();
+    const normalizedRight = [...right].sort();
+    return normalizedLeft.every((id, index) => id === normalizedRight[index]);
+}
+
 export const useGraphStore = create<GraphState>((set, get) => ({
     ...createEmptySessionState(),
     apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
     isHydrated: false,
-    mergeSelectionIds: [],
+    selectedNodeIds: [],
 
     hydrateSession: async () => {
         const savedSession = await loadLastSession();
@@ -48,6 +61,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         if (savedSession) {
             set({
                 ...savedSession.graph,
+                groups: savedSession.graph.groups ?? {},
                 sessionId: savedSession.id,
                 createdAt: savedSession.createdAt,
                 apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
@@ -70,7 +84,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             ...emptyState,
             apiKey: get().apiKey,
             isHydrated: true,
-            mergeSelectionIds: [],
+            selectedNodeIds: [],
         });
     },
 
@@ -84,27 +98,69 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
         set({
             ...savedSession.graph,
+            groups: savedSession.graph.groups ?? {},
             sessionId: savedSession.id,
             createdAt: savedSession.createdAt,
             apiKey: get().apiKey,
             isHydrated: true,
-            mergeSelectionIds: [],
+            selectedNodeIds: [],
         });
     },
 
-    toggleMergeSelection: (id) => set((state) => {
-        const exists = state.mergeSelectionIds.includes(id);
+    toggleNodeSelection: (id) => set((state) => {
+        const exists = state.selectedNodeIds.includes(id);
         if (exists) {
             return {
-                mergeSelectionIds: state.mergeSelectionIds.filter((selectedId) => selectedId !== id),
+                selectedNodeIds: state.selectedNodeIds.filter((selectedId) => selectedId !== id),
             };
         }
 
-        const nextIds = [...state.mergeSelectionIds, id].slice(-2);
-        return { mergeSelectionIds: nextIds };
+        return { selectedNodeIds: [...state.selectedNodeIds, id] };
     }),
 
-    clearMergeSelection: () => set({ mergeSelectionIds: [] }),
+    setSelectedNodeIds: (ids) => set((state) => {
+        if (areNodeSelectionsEqual(state.selectedNodeIds, ids)) {
+            return state;
+        }
+
+        return { selectedNodeIds: ids };
+    }),
+
+    clearNodeSelection: () => set({ selectedNodeIds: [] }),
+
+    createGroup: (groupData) => {
+        const id = crypto.randomUUID();
+        const newGroup: ContextGroup = {
+            ...groupData,
+            id,
+        };
+
+        set((state) => {
+            const nextNodes = { ...state.nodes };
+            for (const nodeId of groupData.nodeIds) {
+                const node = nextNodes[nodeId];
+                if (!node) continue;
+                const currentGroupIds = node.groupIds ?? [];
+                if (!currentGroupIds.includes(id)) {
+                    nextNodes[nodeId] = {
+                        ...node,
+                        groupIds: [...currentGroupIds, id],
+                    };
+                }
+            }
+
+            return {
+                groups: {
+                    ...state.groups,
+                    [id]: newGroup,
+                },
+                nodes: nextNodes,
+                selectedNodeIds: [],
+            };
+        });
+
+        return id;
+    },
 
     addNode: (nodeData) => {
         const id = crypto.randomUUID();
@@ -121,7 +177,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 nodes: { ...state.nodes, [id]: newNode },
                 rootId: isFirstNode ? id : state.rootId,
                 activeNodeId: id,
-                mergeSelectionIds: [],
+                selectedNodeIds: [],
             };
         });
 
@@ -244,6 +300,7 @@ useGraphStore.subscribe((state) => {
     const snapshot = JSON.stringify({
         sessionId: state.sessionId,
         nodes: state.nodes,
+        groups: state.groups,
         rootId: state.rootId,
         activeNodeId: state.activeNodeId,
     });
@@ -260,11 +317,13 @@ useGraphStore.subscribe((state) => {
         updatedAt: new Date().toISOString(),
         title: deriveSessionTitle({
             nodes: state.nodes,
+            groups: state.groups,
             rootId: state.rootId,
             activeNodeId: state.activeNodeId,
         }),
         graph: {
             nodes: state.nodes,
+            groups: state.groups,
             rootId: state.rootId,
             activeNodeId: state.activeNodeId,
         },
