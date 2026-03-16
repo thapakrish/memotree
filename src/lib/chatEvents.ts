@@ -70,11 +70,15 @@ export function getNodeSummary(node: Pick<MessageNode, 'role' | 'events' | 'cont
     return node.content || 'Tool ran with no user-facing answer';
 }
 
-export function getNodeBadges(node: Pick<MessageNode, 'events' | 'memoryPatches' | 'kind' | 'mergeContext'>): string[] {
+export function getNodeBadges(node: Pick<MessageNode, 'events' | 'memoryPatches' | 'kind' | 'mergeContext' | 'inferenceMetadata'>): string[] {
     const badges = new Set<string>();
 
     if (node.kind === 'merge' || node.mergeContext) {
         badges.add('merge');
+    }
+
+    if (node.inferenceMetadata?.inferred) {
+        badges.add('inferred');
     }
 
     for (const event of node.events ?? []) {

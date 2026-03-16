@@ -24,6 +24,7 @@ import { buildMergeContext, buildMergeRequestContents, isMergeableAssistant } fr
 import { getNodeSummary, mergeEvents } from '../lib/chatEvents';
 import type { ChatEvent, MergeContextMode } from '../store/types';
 import { reconstructMemory } from '../lib/memoryEngine';
+import { buildImportedPathGroups, getImportedPathGroupPositionKey } from '../lib/import/pathGroups';
 
 const nodeTypes = {
     custom: CustomNode,
@@ -32,7 +33,9 @@ const nodeTypes = {
 export function GraphView() {
     const {
         nodes: storeNodes,
+        previewNodes,
         groups: storeGroups,
+        uiPositions,
         activeNodeId,
         apiKey,
         selectedNodeIds,
@@ -42,6 +45,9 @@ export function GraphView() {
         clearNodeSelection,
         createGroup,
         addNode,
+        setUiPosition,
+        importEnvelope,
+        previewImportEnvelope,
     } = useGraphStore();
 
     const [rfNodes, setNodes, onNodesChange] = useNodesState<Node>([]);
@@ -52,12 +58,72 @@ export function GraphView() {
     const [isGrouping, setIsGrouping] = useState(false);
     const [isSelectionMode, setIsSelectionMode] = useState(false);
     const { setCenter } = useReactFlow();
+    const renderedNodes = previewNodes ?? storeNodes;
+    const renderedImportEnvelope = previewImportEnvelope ?? importEnvelope;
+
+    const getPathGroupSavedPosition = useCallback((pathGroup: { id: string; nodeIds: string[]; primaryNodeId: string }) => {
+        return (
+            uiPositions[getImportedPathGroupPositionKey(pathGroup)] ??
+            uiPositions[pathGroup.primaryNodeId] ??
+            pathGroup.nodeIds.map((nodeId) => uiPositions[nodeId]).find(Boolean)
+        );
+    }, [uiPositions]);
 
     useEffect(() => {
         const rawNodes: Node[] = [];
         const rawEdges: Edge[] = [];
+        const pathGroups = buildImportedPathGroups({ nodes: renderedNodes, importEnvelope: renderedImportEnvelope });
+        const displayIdByImportedNodeId = new Map<string, string>();
 
-        Object.values(storeNodes).forEach((node) => {
+        for (const pathGroup of pathGroups) {
+            for (const nodeId of pathGroup.nodeIds) {
+                displayIdByImportedNodeId.set(nodeId, pathGroup.id);
+            }
+        }
+
+        pathGroups.forEach((pathGroup) => {
+            rawNodes.push({
+                id: pathGroup.id,
+                type: 'custom',
+                position: getPathGroupSavedPosition(pathGroup) ?? { x: 0, y: 0 },
+                selected: selectedNodeIds.includes(pathGroup.primaryNodeId),
+                data: {
+                    pathGroup,
+                    isActive: pathGroup.nodeIds.includes(activeNodeId ?? ''),
+                    isSelected: selectedNodeIds.includes(pathGroup.primaryNodeId),
+                    groups: [],
+                    onInspectPathGroup: (selectedPathGroup: { primaryNodeId: string }) => {
+                        clearNodeSelection();
+                        setActiveNode(selectedPathGroup.primaryNodeId);
+                    },
+                },
+            });
+
+            pathGroup.parentGroupIds.forEach((parentGroupId) => {
+                rawEdges.push({
+                    id: `e-${parentGroupId}-${pathGroup.id}`,
+                    source: parentGroupId,
+                    target: pathGroup.id,
+                    type: 'smoothstep',
+                    animated: pathGroup.nodeIds.includes(activeNodeId ?? ''),
+                    style: {
+                        stroke: pathGroup.nodeIds.includes(activeNodeId ?? '') ? '#3b82f6' : pathGroup.inferred ? '#818cf8' : '#cbd5e1',
+                        strokeWidth: pathGroup.nodeIds.includes(activeNodeId ?? '') ? 3 : pathGroup.inferred ? 2.5 : 2,
+                        strokeDasharray: pathGroup.inferred ? '6 4' : undefined,
+                    },
+                    markerEnd: {
+                        type: MarkerType.ArrowClosed,
+                        color: pathGroup.nodeIds.includes(activeNodeId ?? '') ? '#3b82f6' : pathGroup.inferred ? '#818cf8' : '#cbd5e1',
+                    },
+                });
+            });
+        });
+
+        Object.values(renderedNodes).forEach((node) => {
+            if (node.importMetadata?.origin === 'imported' && pathGroups.length > 0) {
+                return;
+            }
+
             rawNodes.push({
                 id: node.id,
                 type: 'custom',
@@ -77,33 +143,54 @@ export function GraphView() {
                     ? [node.parentId]
                     : [];
 
-            parentEdgeIds.forEach((parentId) => {
+            const normalizedParentEdges = parentEdgeIds.map((parentId) => ({
+                parentId,
+                displayParentId: displayIdByImportedNodeId.get(parentId) ?? parentId,
+            })).filter((edge, index, edges) =>
+                edges.findIndex((candidate) => candidate.displayParentId === edge.displayParentId) === index,
+            );
+
+            normalizedParentEdges.forEach(({ parentId, displayParentId }) => {
+                const isPrimaryEdge = parentId === node.parentId || parentEdgeIds.length === 1;
+                const isInferredEdge = Boolean(node.inferenceMetadata?.inferred) && !isPrimaryEdge;
                 rawEdges.push({
-                    id: `e-${parentId}-${node.id}`,
-                    source: parentId,
+                    id: `e-${displayParentId}-${node.id}`,
+                    source: displayParentId,
                     target: node.id,
                     type: 'smoothstep',
-                    animated: node.id === activeNodeId,
+                    animated: node.id === activeNodeId && isPrimaryEdge,
                     style: {
-                        stroke: node.id === activeNodeId ? '#3b82f6' : '#cbd5e1',
-                        strokeWidth: node.id === activeNodeId ? 3 : 2,
+                        stroke: node.id === activeNodeId && isPrimaryEdge
+                            ? '#3b82f6'
+                            : isInferredEdge
+                                ? '#818cf8'
+                                : '#cbd5e1',
+                        strokeWidth: node.id === activeNodeId && isPrimaryEdge ? 3 : isInferredEdge ? 2.5 : 2,
+                        strokeDasharray: isInferredEdge ? '6 4' : undefined,
                     },
                     markerEnd: {
                         type: MarkerType.ArrowClosed,
-                        color: node.id === activeNodeId ? '#3b82f6' : '#cbd5e1',
+                        color: node.id === activeNodeId && isPrimaryEdge
+                            ? '#3b82f6'
+                            : isInferredEdge
+                                ? '#818cf8'
+                                : '#cbd5e1',
                     },
                 });
             });
         });
 
-        const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(rawNodes, rawEdges);
+        const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(rawNodes, rawEdges, 'TB', uiPositions);
         setNodes(layoutedNodes);
         setEdges(layoutedEdges);
-    }, [storeNodes, storeGroups, activeNodeId, selectedNodeIds, setNodes, setEdges]);
+    }, [renderedNodes, storeGroups, activeNodeId, selectedNodeIds, setNodes, setEdges, renderedImportEnvelope, uiPositions, getPathGroupSavedPosition, clearNodeSelection, setActiveNode]);
 
     useEffect(() => {
         if (activeNodeId && rfNodes.length > 0) {
-            const activeNode = rfNodes.find((node) => node.id === activeNodeId);
+            const activeNode = rfNodes.find((node) => {
+                const data = node.data as { pathGroup?: { nodeIds: string[] } };
+                return node.id === activeNodeId || data.pathGroup?.nodeIds.includes(activeNodeId);
+            });
             if (activeNode) {
                 const x = activeNode.position.x + 125;
                 const y = activeNode.position.y + 50;
@@ -136,18 +223,20 @@ export function GraphView() {
     }, [clearNodeSelection]);
 
     const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
+        const nodeData = node.data as { pathGroup?: { primaryNodeId: string } };
+        const targetNodeId = nodeData.pathGroup?.primaryNodeId ?? node.id;
         if (isSelectionMode) {
-            toggleNodeSelection(node.id);
+            toggleNodeSelection(targetNodeId);
             return;
         }
 
         if (event.shiftKey || event.metaKey || event.ctrlKey) {
-            toggleNodeSelection(node.id);
+            toggleNodeSelection(targetNodeId);
             return;
         }
 
         clearNodeSelection();
-        setActiveNode(node.id);
+        setActiveNode(targetNodeId);
     }, [clearNodeSelection, isSelectionMode, setActiveNode, toggleNodeSelection]);
 
     const handleSelectionModeToggle = () => {
@@ -163,8 +252,22 @@ export function GraphView() {
         clearNodeSelection();
     };
 
+    const handleNodeDragStop = useCallback((_event: React.MouseEvent, node: Node) => {
+        const nodeData = node.data as { pathGroup?: { id: string; nodeIds: string[]; primaryNodeId: string } };
+        const pathGroup = nodeData.pathGroup;
+
+        if (pathGroup) {
+            setUiPosition(getImportedPathGroupPositionKey(pathGroup), node.position);
+            setUiPosition(pathGroup.primaryNodeId, node.position);
+            pathGroup.nodeIds.forEach((nodeId) => setUiPosition(nodeId, node.position));
+            return;
+        }
+
+        setUiPosition(node.id, node.position);
+    }, [setUiPosition]);
+
     const selectedNodes = selectedNodeIds
-        .map((id) => storeNodes[id])
+        .map((id) => renderedNodes[id] ?? storeNodes[id])
         .filter(Boolean);
     const canMergeSelected = selectedNodes.length === 2 && selectedNodes.every(isMergeableAssistant) && !!apiKey;
     const canGroupSelected = selectedNodes.length > 0;
@@ -312,6 +415,7 @@ export function GraphView() {
                 edges={rfEdges}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
+                onNodeDragStop={handleNodeDragStop}
                 onNodeClick={onNodeClick}
                 onPaneClick={clearNodeSelection}
                 onSelectionChange={({ nodes: selectedFlowNodes }) => {
@@ -319,7 +423,10 @@ export function GraphView() {
                         return;
                     }
 
-                    setSelectedNodeIds(selectedFlowNodes.map((node) => node.id));
+                    setSelectedNodeIds(selectedFlowNodes.map((selectedFlowNode) => {
+                        const flowNodeData = selectedFlowNode.data as { pathGroup?: { primaryNodeId: string } };
+                        return flowNodeData.pathGroup?.primaryNodeId ?? selectedFlowNode.id;
+                    }));
                 }}
                 nodeTypes={nodeTypes}
                 elementsSelectable={isSelectionMode}

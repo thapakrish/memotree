@@ -1,20 +1,28 @@
 import { Handle, Position } from '@xyflow/react';
 import type { ContextGroup, MessageNode } from '../store/types';
+import type { ImportedPathGroup } from '../lib/import/pathGroups';
 import { getNodeBadges, getNodeSummary } from '../lib/chatEvents';
 
 interface CustomNodeProps {
     data: {
-        node: MessageNode;
+        node?: MessageNode;
+        pathGroup?: ImportedPathGroup;
         isActive: boolean;
         isSelected: boolean;
         groups: ContextGroup[];
+        onInspectPathGroup?: (pathGroup: ImportedPathGroup) => void;
     };
 }
 
 export function CustomNode({ data }: CustomNodeProps) {
-    const { node, isActive, isSelected, groups } = data;
-    const badges = getNodeBadges(node);
-    const summary = node.summary || getNodeSummary(node);
+    const { node, pathGroup, isActive, isSelected, groups, onInspectPathGroup } = data;
+    const isPathGroup = Boolean(pathGroup);
+    const badges = node ? getNodeBadges(node) : [];
+    const summary = pathGroup
+        ? pathGroup.summary
+        : node
+            ? node.summary || getNodeSummary(node)
+            : '';
     const primaryGroup = groups[0];
 
     return (
@@ -36,17 +44,47 @@ export function CustomNode({ data }: CustomNodeProps) {
             <Handle type="target" position={Position.Top} className="w-3 h-3 bg-slate-400" />
 
             <div className="flex items-center justify-between mb-2">
-                <span className={`text-xs font-bold uppercase ${node.role === 'user' ? 'text-blue-600' : 'text-purple-600'}`}>
-                    {node.role}
+                <span className={`text-xs font-bold uppercase ${
+                    isPathGroup
+                        ? 'text-indigo-600'
+                        : node?.role === 'user'
+                            ? 'text-blue-600'
+                            : 'text-purple-600'
+                }`}>
+                    {isPathGroup ? 'path' : node?.role}
                 </span>
                 <span className="text-xs text-slate-400">
-                    {new Date(node.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    {new Date(pathGroup?.endTimestamp ?? node?.timestamp ?? new Date().toISOString()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
             </div>
 
-            <p className="text-sm text-slate-700 line-clamp-3">
-                {summary}
-            </p>
+            {pathGroup ? (
+                <>
+                    <div className="text-sm font-semibold text-slate-800 line-clamp-2">
+                        {pathGroup.title}
+                    </div>
+                    <p className="mt-1 text-sm text-slate-600 line-clamp-3">
+                        {summary}
+                    </p>
+                    <div className="mt-3 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                        <span>{pathGroup.turnCount} turns</span>
+                        {pathGroup.inferred && <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-indigo-700">inferred path</span>}
+                    </div>
+                    <button
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onInspectPathGroup?.(pathGroup);
+                        }}
+                        className="mt-3 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 transition-colors hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"
+                    >
+                        Open Turns
+                    </button>
+                </>
+            ) : (
+                <p className="text-sm text-slate-700 line-clamp-3">
+                    {summary}
+                </p>
+            )}
 
             {groups.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-1.5">
@@ -62,7 +100,7 @@ export function CustomNode({ data }: CustomNodeProps) {
                 </div>
             )}
 
-            {badges.length > 0 && (
+            {!pathGroup && badges.length > 0 && (
                 <div className="mt-3 pt-2 border-t border-slate-100 flex flex-wrap gap-1.5">
                     {badges.map((badge) => (
                         <span
@@ -74,6 +112,8 @@ export function CustomNode({ data }: CustomNodeProps) {
                                         ? 'bg-sky-50 text-sky-700'
                                         : badge === 'merge'
                                             ? 'bg-fuchsia-50 text-fuchsia-700'
+                                        : badge === 'inferred'
+                                            ? 'bg-indigo-50 text-indigo-700'
                                         : badge === 'thinking'
                                             ? 'bg-amber-50 text-amber-700'
                                             : 'bg-rose-50 text-rose-700'
