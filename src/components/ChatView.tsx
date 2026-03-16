@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useRef, useState } from 'react';
-import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen } from 'lucide-react';
+import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye } from 'lucide-react';
 import type { Content, FunctionCall, GenerateContentResponse, Part } from '@google/genai';
 import { useGraphStore } from '../store/useGraphStore';
 import type { ChatEvent, MessageNode } from '../store/types';
@@ -17,6 +17,7 @@ import {
 import { appendEvent, getFinalAnswerText, getNodeSummary, mergeEvents } from '../lib/chatEvents';
 import { reconstructMemory } from '../lib/memoryEngine';
 import { SessionsModal } from './SessionsModal';
+import { ImportSuggestionsModal } from './ImportSuggestionsModal';
 
 function getTextSummary(text: string): string {
     return text.length > 40 ? `${text.slice(0, 40)}...` : text;
@@ -65,6 +66,8 @@ function toReplayParts(msg: MessageNode) {
             }
         });
 }
+
+const MAX_TOOL_ROUNDS = 2;
 
 async function collectStreamedAssistantResponse(
     stream: AsyncGenerator<GenerateContentResponse>,
@@ -187,15 +190,32 @@ function AssistantMessageBody({
 }
 
 export function ChatView() {
-    const { activeNodeId, getPath, addNode, setActiveNode, apiKey, setApiKey } = useGraphStore();
+    const {
+        activeNodeId,
+        getPath,
+        addNode,
+        setActiveNode,
+        apiKey,
+        setApiKey,
+        importEnvelope,
+        previewImportEnvelope,
+        applyAcceptedImportSuggestions,
+        clearImportPreview,
+        undoLastImportApply,
+        lastImportApplySnapshot,
+    } = useGraphStore();
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
     const [streamingEvents, setStreamingEvents] = useState<ChatEvent[]>([]);
     const [thoughtsTokenCount, setThoughtsTokenCount] = useState(0);
     const [isSessionsOpen, setIsSessionsOpen] = useState(false);
+    const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
 
     const path = getPath(activeNodeId);
+    const visibleImportEnvelope = previewImportEnvelope ?? importEnvelope;
+    const acceptedSuggestionCount = visibleImportEnvelope?.suggestions?.filter((suggestion) => suggestion.status === 'accepted').length ?? 0;
+    const pendingSuggestionCount = visibleImportEnvelope?.suggestions?.filter((suggestion) => suggestion.status !== 'accepted' && suggestion.status !== 'rejected').length ?? 0;
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -235,10 +255,28 @@ export function ChatView() {
             let events = initialResponse.events;
             let nextMemoryState = memoryState;
             const patches = [];
-            const functionResponses: Array<{ id?: string; name: string; response: Record<string, unknown> }> = [];
+            let pendingFunctionCalls = initialResponse.functionCalls;
+            let toolRounds = 0;
 
-            for (const call of initialResponse.functionCalls) {
-                if (call.name === 'text_editor') {
+            while (pendingFunctionCalls.length > 0 && toolRounds < MAX_TOOL_ROUNDS) {
+                toolRounds += 1;
+                const functionResponses: Array<{ id?: string; name: string; response: Record<string, unknown> }> = [];
+
+                for (const call of pendingFunctionCalls) {
+                    if (call.name !== 'text_editor') {
+                        const toolName = call.name ?? 'unknown_tool';
+                        const unsupportedToolEvent: ChatEvent = {
+                            kind: 'tool_result',
+                            toolName,
+                            callId: call.id,
+                            status: 'error',
+                            summary: `Unsupported tool call: ${toolName}`,
+                            payload: call.args,
+                        };
+                        events = appendEvent(events, unsupportedToolEvent);
+                        continue;
+                    }
+
                     const toolArgs = normalizeToolArgs(call.args);
                     const { patch, updatedMemory } = interceptMemoryTool(
                         toolArgs,
@@ -260,8 +298,6 @@ export function ChatView() {
                     };
 
                     events = appendEvent(events, toolResultEvent);
-                    setStreamingEvents(events);
-
                     functionResponses.push({
                         id: call.id,
                         name: call.name,
@@ -271,15 +307,19 @@ export function ChatView() {
                         },
                     });
                 }
-            }
 
-            if (initialResponse.functionCalls.length > 0 && functionResponses.length > 0) {
+                setStreamingEvents(events);
+
+                if (functionResponses.length === 0) {
+                    break;
+                }
+
                 const followUpContents: Content[] = [
                     ...newPath.map((node) => ({
                         role: node.role === 'assistant' ? 'model' : 'user',
                         parts: toReplayParts(node),
                     })),
-                    createModelToolCallContent(events, initialResponse.functionCalls),
+                    createModelToolCallContent(events, pendingFunctionCalls),
                     createFunctionResponseContent(functionResponses),
                 ];
 
@@ -295,6 +335,22 @@ export function ChatView() {
                 );
 
                 events = mergeEvents(events, followUpResponse.events);
+                pendingFunctionCalls = followUpResponse.functionCalls;
+            }
+
+            if (pendingFunctionCalls.length > 0) {
+                events = appendEvent(events, {
+                    kind: 'tool_result',
+                    toolName: 'tool_loop_guard',
+                    status: 'error',
+                    summary: `Stopped after ${MAX_TOOL_ROUNDS} tool rounds`,
+                    payload: {
+                        remainingCalls: pendingFunctionCalls.map((call) => ({
+                            id: call.id,
+                            name: call.name,
+                        })),
+                    },
+                });
             }
 
             const assistantText = getAssistantText(events) || 'Tool ran with no user-facing answer';
@@ -342,6 +398,85 @@ export function ChatView() {
             </div>
 
             <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50 scroll-smooth">
+                {visibleImportEnvelope && (
+                    <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-900">
+                        <div className="font-semibold">
+                            Imported from {visibleImportEnvelope.sourcePlatform.charAt(0).toUpperCase() + visibleImportEnvelope.sourcePlatform.slice(1)}
+                        </div>
+                        <div className="mt-1 text-xs leading-relaxed text-violet-700">
+                            {visibleImportEnvelope.messageCount} turns imported. {visibleImportEnvelope.suggestions?.length ?? 0} deterministic structure suggestions detected.
+                        </div>
+                        {visibleImportEnvelope.parserConfidence && (
+                            <div className="mt-1 text-xs leading-relaxed text-violet-700">
+                                Parser confidence: {visibleImportEnvelope.parserConfidence}
+                                {visibleImportEnvelope.sourceConversationId ? ` · source ${visibleImportEnvelope.sourceConversationId.slice(0, 8)}` : ''}
+                            </div>
+                        )}
+                        <div className="mt-3 flex items-center gap-3">
+                            <button
+                                onClick={() => setIsSuggestionsOpen(true)}
+                                className="inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-semibold text-violet-700 transition-colors hover:border-violet-300 hover:bg-violet-100"
+                            >
+                                <GitBranch className="h-3.5 w-3.5" />
+                                <span>Review Suggestions</span>
+                            </button>
+                            {previewImportEnvelope ? (
+                                <>
+                                    <button
+                                        onClick={() => applyAcceptedImportSuggestions()}
+                                        disabled={acceptedSuggestionCount === 0}
+                                        className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        <GitBranch className="h-3.5 w-3.5" />
+                                        <span>Apply Preview</span>
+                                    </button>
+                                    <button
+                                        onClick={() => clearImportPreview()}
+                                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-100"
+                                    >
+                                        <Eye className="h-3.5 w-3.5" />
+                                        <span>Exit Preview</span>
+                                    </button>
+                                </>
+                            ) : (
+                                <button
+                                    onClick={() => applyAcceptedImportSuggestions()}
+                                    disabled={acceptedSuggestionCount === 0}
+                                    className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    <GitBranch className="h-3.5 w-3.5" />
+                                    <span>Apply Accepted</span>
+                                </button>
+                            )}
+                            <button
+                                onClick={() => undoLastImportApply()}
+                                disabled={!lastImportApplySnapshot}
+                                className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                <Undo2 className="h-3.5 w-3.5" />
+                                <span>Undo Apply</span>
+                            </button>
+                            <span className="text-xs text-violet-700">
+                                {acceptedSuggestionCount} accepted, {pendingSuggestionCount} pending
+                            </span>
+                        </div>
+                        {previewImportEnvelope && (
+                            <div className="mt-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs leading-relaxed text-blue-700">
+                                Previewing inferred graph changes. Apply to commit or exit preview to discard.
+                            </div>
+                        )}
+                        {visibleImportEnvelope.hiddenContext.notes?.[0] && (
+                            <div className="mt-2 text-xs leading-relaxed text-violet-700">
+                                {visibleImportEnvelope.hiddenContext.notes[0]}
+                            </div>
+                        )}
+                        {(visibleImportEnvelope.importWarnings?.length ?? 0) > 0 && (
+                            <div className="mt-2 rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs leading-relaxed text-violet-700">
+                                {visibleImportEnvelope.importWarnings?.join(' ')}
+                            </div>
+                        )}
+                    </div>
+                )}
                 {path.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-4">
                         <Cpu className="w-12 h-12 opacity-20" />
@@ -470,6 +605,7 @@ export function ChatView() {
                 </div>
             </div>
             <SessionsModal isOpen={isSessionsOpen} onClose={() => setIsSessionsOpen(false)} />
+            <ImportSuggestionsModal isOpen={isSuggestionsOpen} onClose={() => setIsSuggestionsOpen(false)} />
         </div>
     );
 }

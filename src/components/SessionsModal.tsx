@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Clock3, FolderOpen, History, Plus, X } from 'lucide-react';
+import { Clock3, FolderOpen, History, Import, Plus, X } from 'lucide-react';
 import { listSessions, loadLastSession, type PersistedSession } from '../lib/sessionPersistence';
 import { useGraphStore } from '../store/useGraphStore';
+import { ImportChatModal } from './ImportChatModal';
 
 interface SessionsModalProps {
     isOpen: boolean;
@@ -11,6 +12,7 @@ interface SessionsModalProps {
 export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
     const [sessions, setSessions] = useState<PersistedSession[]>([]);
     const [lastSessionId, setLastSessionId] = useState<string | null>(null);
+    const [isImportOpen, setIsImportOpen] = useState(false);
     const { createNewSession, loadSessionById, sessionId } = useGraphStore();
 
     useEffect(() => {
@@ -52,7 +54,7 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
                     </button>
                 </div>
 
-                <div className="grid gap-4 p-6 md:grid-cols-2">
+                <div className="grid gap-4 p-6 md:grid-cols-3">
                     <button
                         onClick={() => {
                             createNewSession();
@@ -88,6 +90,21 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
                         </div>
                         <p className="text-sm leading-relaxed text-slate-500">
                             Jump back to the most recently active saved session.
+                        </p>
+                    </button>
+
+                    <button
+                        onClick={() => setIsImportOpen(true)}
+                        className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-left transition-colors hover:border-violet-300 hover:bg-violet-50"
+                    >
+                        <div className="mb-3 flex items-center gap-3">
+                            <div className="rounded-xl bg-violet-600 p-2 text-white">
+                                <Import className="h-4 w-4" />
+                            </div>
+                            <div className="text-sm font-semibold text-slate-800">Import Chat</div>
+                        </div>
+                        <p className="text-sm leading-relaxed text-slate-500">
+                            Paste a linear transcript from another chat app and turn it into a MemoTree session.
                         </p>
                     </button>
                 </div>
@@ -128,6 +145,13 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
                     )}
                 </div>
             </div>
+            <ImportChatModal
+                isOpen={isImportOpen}
+                onClose={() => {
+                    setIsImportOpen(false);
+                    onClose();
+                }}
+            />
         </div>
     );
 }
