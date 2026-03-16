@@ -28,3 +28,12 @@ backend/.venv/
 backend/**/__pycache__/
 backend/**/*.pyc
 backend/*.egg-info/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
