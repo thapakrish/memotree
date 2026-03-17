@@ -13,12 +13,13 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-import { FolderTree, GitMerge, MousePointer2, SquareDashedMousePointer } from 'lucide-react';
+import { FolderTree, GitMerge, GitCompare, MousePointer2, SquareDashedMousePointer } from 'lucide-react';
 import { useGraphStore } from '../store/useGraphStore';
 import { CustomNode } from './CustomNode';
 import { getLayoutedElements } from '../lib/layout';
 import { MergeBranchesModal } from './MergeBranchesModal';
 import { GroupNodesModal } from './GroupNodesModal';
+import { PathCompareModal } from './PathCompareModal';
 import { buildGeminiContents, generateGeminiResponseStreamFromContents, getAssistantText } from '../lib/geminiEngine';
 import { buildMergeContext, buildMergeRequestContents, isMergeableAssistant } from '../lib/mergeContext';
 import { getNodeSummary, mergeEvents } from '../lib/chatEvents';
@@ -48,12 +49,14 @@ export function GraphView() {
         setUiPosition,
         importEnvelope,
         previewImportEnvelope,
+        getPath,
     } = useGraphStore();
 
     const [rfNodes, setNodes, onNodesChange] = useNodesState<Node>([]);
     const [rfEdges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
     const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
     const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
+    const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
     const [isMerging, setIsMerging] = useState(false);
     const [isGrouping, setIsGrouping] = useState(false);
     const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -271,6 +274,7 @@ export function GraphView() {
         .filter(Boolean);
     const canMergeSelected = selectedNodes.length === 2 && selectedNodes.every(isMergeableAssistant) && !!apiKey;
     const canGroupSelected = selectedNodes.length > 0;
+    const canCompareSelected = selectedNodes.length === 2;
 
     const handleMergeSubmit = async (instruction: string, mode: MergeContextMode) => {
         if (!apiKey || selectedNodes.length !== 2) {
@@ -394,6 +398,14 @@ export function GraphView() {
                     <span>Clear Selection</span>
                 </button>
                 <button
+                    onClick={() => setIsCompareModalOpen(true)}
+                    disabled={!canCompareSelected}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    <GitCompare className="h-4 w-4" />
+                    <span>Compare Paths</span>
+                </button>
+                <button
                     onClick={() => setIsMergeModalOpen(true)}
                     disabled={!canMergeSelected}
                     className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-fuchsia-300 hover:bg-fuchsia-50 hover:text-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-50"
@@ -454,6 +466,14 @@ export function GraphView() {
                 isSubmitting={isGrouping}
                 onClose={() => setIsGroupModalOpen(false)}
                 onSubmit={handleGroupSubmit}
+            />
+            <PathCompareModal
+                isOpen={isCompareModalOpen}
+                leftNode={selectedNodes[0]}
+                rightNode={selectedNodes[1]}
+                getPath={getPath}
+                onClose={() => setIsCompareModalOpen(false)}
+                onNavigate={(id) => setActiveNode(id)}
             />
         </div>
     );

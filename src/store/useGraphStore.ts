@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { ProviderId } from '../lib/providers';
 import type {
     CompactionBlock,
     ContextGroup,
@@ -53,6 +54,7 @@ interface GraphState extends ConversationGraph {
     addMemoryPatch: (nodeId: string, patch: MemoryPatch) => void;
     getPath: (nodeId: string | null) => MessageNode[];
     setApiKey: (key: string) => void;
+    setProviderId: (providerId: ProviderId) => void;
     goToParent: () => void;
     goToLatestChild: () => void;
     nextSibling: () => void;
@@ -69,6 +71,7 @@ function createEmptySessionState() {
         compactions: {},
         rootId: null,
         activeNodeId: null,
+        providerId: 'gemini' as ProviderId,
         importEnvelope: undefined,
         previewNodes: null,
         previewImportEnvelope: null,
@@ -148,6 +151,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 groups: savedSession.graph.groups ?? {},
                 uiPositions: savedSession.graph.uiPositions ?? {},
                 compactions: savedSession.graph.compactions ?? {},
+                providerId: savedSession.graph.providerId ?? 'gemini',
                 sessionId: savedSession.id,
                 createdAt: savedSession.createdAt,
                 apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
@@ -175,6 +179,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         set({
             ...emptyState,
             apiKey: get().apiKey,
+            providerId: get().providerId,
             isHydrated: true,
             selectedNodeIds: [],
         });
@@ -192,7 +197,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             ...savedSession.graph,
             groups: savedSession.graph.groups ?? {},
             uiPositions: savedSession.graph.uiPositions ?? {},
-                compactions: savedSession.graph.compactions ?? {},
+            compactions: savedSession.graph.compactions ?? {},
+            providerId: savedSession.graph.providerId ?? 'gemini',
             sessionId: savedSession.id,
             createdAt: savedSession.createdAt,
             apiKey: get().apiKey,
@@ -255,6 +261,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             groups: {},
             uiPositions: {},
             compactions: {},
+            providerId: get().providerId,
             rootId,
             activeNodeId: previousNodeId,
             importEnvelope: {
@@ -499,6 +506,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
     setActiveNode: (id) => set({ activeNodeId: id }),
     setApiKey: (key) => set({ apiKey: key }),
+    setProviderId: (providerId) => set({ providerId }),
 
     updateNodeSummary: (id, summary) => set((state) => {
         const node = state.nodes[id];
@@ -617,6 +625,7 @@ useGraphStore.subscribe((state) => {
         groups: state.groups,
         uiPositions: state.uiPositions,
         compactions: state.compactions,
+        providerId: state.providerId,
         rootId: state.rootId,
         activeNodeId: state.activeNodeId,
         importEnvelope: state.importEnvelope,
@@ -637,6 +646,7 @@ useGraphStore.subscribe((state) => {
             groups: state.groups,
             uiPositions: state.uiPositions,
             compactions: state.compactions,
+            providerId: state.providerId,
             rootId: state.rootId,
             activeNodeId: state.activeNodeId,
             importEnvelope: state.importEnvelope,
@@ -646,6 +656,7 @@ useGraphStore.subscribe((state) => {
             groups: state.groups,
             uiPositions: state.uiPositions,
             compactions: state.compactions,
+            providerId: state.providerId,
             rootId: state.rootId,
             activeNodeId: state.activeNodeId,
             importEnvelope: state.importEnvelope,

@@ -1,3 +1,5 @@
+import type { ProviderId } from '../lib/providers';
+
 export interface MemoryPatch {
     // We store the stringified diff-match-patch output
     diffText: string;
@@ -184,6 +186,7 @@ export interface ConversationGraph {
     compactions: Record<string, CompactionBlock>;
     rootId: string | null;
     activeNodeId: string | null;
+    providerId: ProviderId;
     apiKey: string | null;
     importEnvelope?: ImportedConversationEnvelope;
 }

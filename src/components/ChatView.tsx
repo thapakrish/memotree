@@ -1,20 +1,10 @@
-import { startTransition, useEffect, useRef, useState } from 'react';
+import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, ScanText } from 'lucide-react';
-import type { Content, FunctionCall, GenerateContentResponse, Part } from '@google/genai';
 import { useGraphStore } from '../store/useGraphStore';
 import type { AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, MessageNode } from '../store/types';
-import {
-    compactPathNodes,
-    createFunctionResponseContent,
-    createModelToolCallContent,
-    extractAssistantEvents,
-    extractFunctionCalls,
-    extractThoughtsTokenCount,
-    generateGeminiResponseStream,
-    generateGeminiResponseStreamFromContents,
-    getAssistantText,
-    interceptMemoryTool,
-} from '../lib/geminiEngine';
+import { getAssistantText, interceptMemoryTool } from '../lib/geminiEngine';
+import type { IProvider, ProviderFunctionCall, StreamDelta } from '../lib/providers';
+import { createProvider } from '../lib/providers';
 import { appendEvent, getFinalAnswerText, getNodeSummary, mergeEvents } from '../lib/chatEvents';
 import { reconstructMemory } from '../lib/memoryEngine';
 import { SessionsModal } from './SessionsModal';
@@ -148,82 +138,24 @@ async function processClipboardItems(
     return results;
 }
 
-function toReplayParts(msg: MessageNode) {
-    if (msg.role !== 'assistant') {
-        const parts: Part[] = [{ text: msg.content }];
-        for (const att of msg.attachments ?? []) {
-            parts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
-        }
-        return parts;
-    }
-
-    return (msg.events ?? []).flatMap<Part>((event) => {
-        switch (event.kind) {
-            case 'thought':
-                return [{
-                    text: event.text,
-                    thought: true as const,
-                    thoughtSignature: event.signature,
-                }];
-            case 'text':
-                return [{ text: event.text }];
-            case 'tool_call':
-                return [{
-                    functionCall: {
-                        id: event.callId,
-                        name: event.toolName,
-                        args: event.args,
-                    },
-                }];
-            case 'tool_result':
-                return [];
-            }
-        });
-}
-
 const MAX_TOOL_ROUNDS = 2;
 
-async function collectStreamedAssistantResponse(
-    stream: AsyncGenerator<GenerateContentResponse>,
+async function collectProviderStream(
+    stream: AsyncGenerator<StreamDelta>,
     setStreamingEvents: (events: ChatEvent[]) => void,
     setThoughtsTokenCount: (count: number) => void,
-) {
-    let events: ChatEvent[] = [];
-    let maxThoughtsTokenCount = 0;
-    const functionCalls = new Map<string, FunctionCall>();
+): Promise<StreamDelta> {
+    let lastDelta: StreamDelta = { events: [], thoughtsTokenCount: 0, functionCalls: [] };
 
-    for await (const chunk of stream) {
-        const chunkEvents = extractAssistantEvents(chunk);
-        if (chunkEvents.length > 0) {
-            events = mergeEvents(events, chunkEvents);
-            startTransition(() => {
-                setStreamingEvents(events);
-            });
-        }
-
-        const chunkThoughtsTokenCount = extractThoughtsTokenCount(chunk);
-        if (chunkThoughtsTokenCount > maxThoughtsTokenCount) {
-            maxThoughtsTokenCount = chunkThoughtsTokenCount;
-            startTransition(() => {
-                setThoughtsTokenCount(chunkThoughtsTokenCount);
-            });
-        }
-
-        for (const call of extractFunctionCalls(chunk)) {
-            const functionKey = JSON.stringify([
-                call.id ?? '',
-                call.name ?? '',
-                call.args ?? {},
-            ]);
-            functionCalls.set(functionKey, call);
-        }
+    for await (const delta of stream) {
+        lastDelta = delta;
+        startTransition(() => {
+            setStreamingEvents(delta.events);
+            setThoughtsTokenCount(delta.thoughtsTokenCount);
+        });
     }
 
-    return {
-        events,
-        thoughtsTokenCount: maxThoughtsTokenCount,
-        functionCalls: [...functionCalls.values()],
-    };
+    return lastDelta;
 }
 
 function CopyMessageButton({ text }: { text: string }) {
@@ -345,6 +277,7 @@ export function ChatView() {
         getPath,
         addNode,
         setActiveNode,
+        providerId,
         apiKey,
         setApiKey,
         importEnvelope,
@@ -367,6 +300,10 @@ export function ChatView() {
     const [isDraggingOver, setIsDraggingOver] = useState(false);
     const [isInspectorOpen, setIsInspectorOpen] = useState(false);
     const [isCompacting, setIsCompacting] = useState(false);
+    const provider = useMemo<IProvider | null>(
+        () => apiKey ? createProvider(providerId, apiKey) : null,
+        [apiKey, providerId],
+    );
     const scrollRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -381,6 +318,7 @@ export function ChatView() {
     };
 
     const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        if (!provider?.capabilities.supportsImages) return;
         const hasImage = Array.from(e.clipboardData.items).some(
             (item) => item.kind === 'file' && item.type.startsWith('image/'),
         );
@@ -394,6 +332,7 @@ export function ChatView() {
     };
 
     const handleDragOver = (e: React.DragEvent) => {
+        if (!provider?.capabilities.supportsImages) return;
         if (Array.from(e.dataTransfer.items).some((item) => item.type.startsWith('image/'))) {
             e.preventDefault();
             setIsDraggingOver(true);
@@ -403,6 +342,7 @@ export function ChatView() {
     const handleDragLeave = () => setIsDraggingOver(false);
 
     const handleDrop = async (e: React.DragEvent) => {
+        if (!provider?.capabilities.supportsImages) return;
         e.preventDefault();
         setIsDraggingOver(false);
         const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'));
@@ -411,6 +351,7 @@ export function ChatView() {
     };
 
     const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!provider?.capabilities.supportsImages) return;
         const files = Array.from(e.target.files ?? []);
         const parts = await Promise.all(files.map((f) => processImageFile(f, 'file')));
         addAttachments(parts.filter(Boolean) as AttachmentPart[]);
@@ -452,12 +393,12 @@ export function ChatView() {
     };
 
     const handleCompactPath = async () => {
-        if (!apiKey || isCompacting) return;
+        if (!provider || isCompacting) return;
         const toCompact = getCompactionRange();
         if (!toCompact || toCompact.length === 0) return;
         setIsCompacting(true);
         try {
-            const summary = await compactPathNodes(toCompact, apiKey);
+            const summary = await provider.compactNodes(toCompact);
             if (summary) {
                 const block: CompactionBlock = {
                     id: crypto.randomUUID(),
@@ -477,7 +418,7 @@ export function ChatView() {
     };
 
     const handleSend = async () => {
-        if ((!input.trim() && attachments.length === 0) || !apiKey) return;
+        if ((!input.trim() && attachments.length === 0) || !provider) return;
 
         const controller = new AbortController();
         abortControllerRef.current = controller;
@@ -503,17 +444,16 @@ export function ChatView() {
         try {
             const newPath = getPath(userNodeId);
             const memoryState = reconstructMemory(newPath);
-            const initialStream = await generateGeminiResponseStream(newPath, memoryState, apiKey, controller.signal, compactions);
-            const initialResponse = await collectStreamedAssistantResponse(
-                initialStream,
+            const initialDelta = await collectProviderStream(
+                provider.stream(newPath, memoryState, compactions, controller.signal),
                 setStreamingEvents,
                 setThoughtsTokenCount,
             );
 
-            let events = initialResponse.events;
+            let events = initialDelta.events;
             let nextMemoryState = memoryState;
             const patches = [];
-            let pendingFunctionCalls = initialResponse.functionCalls;
+            let pendingFunctionCalls: ProviderFunctionCall[] = initialDelta.functionCalls;
             let toolRounds = 0;
 
             while (pendingFunctionCalls.length > 0 && toolRounds < MAX_TOOL_ROUNDS && !controller.signal.aborted) {
@@ -572,29 +512,17 @@ export function ChatView() {
                     break;
                 }
 
-                const followUpContents: Content[] = [
-                    ...newPath.map((node) => ({
-                        role: node.role === 'assistant' ? 'model' : 'user',
-                        parts: toReplayParts(node),
-                    })),
-                    createModelToolCallContent(events, pendingFunctionCalls),
-                    createFunctionResponseContent(functionResponses),
-                ];
-
-                const followUpStream = await generateGeminiResponseStreamFromContents(
-                    followUpContents,
-                    nextMemoryState,
-                    apiKey,
-                    controller.signal,
-                );
-                const followUpResponse = await collectStreamedAssistantResponse(
-                    followUpStream,
+                const followUpDelta = await collectProviderStream(
+                    provider.continueWithToolResults(
+                        newPath, compactions, events, pendingFunctionCalls,
+                        functionResponses, nextMemoryState, controller.signal,
+                    ),
                     setStreamingEvents,
                     setThoughtsTokenCount,
                 );
 
-                events = mergeEvents(events, followUpResponse.events);
-                pendingFunctionCalls = followUpResponse.functionCalls;
+                events = mergeEvents(events, followUpDelta.events);
+                pendingFunctionCalls = followUpDelta.functionCalls;
             }
 
             if (pendingFunctionCalls.length > 0 && !controller.signal.aborted) {
@@ -677,7 +605,7 @@ export function ChatView() {
                     path={path}
                     pendingInput={input}
                     pendingAttachments={attachments}
-                    apiKey={apiKey}
+                    provider={provider}
                     importEnvelope={visibleImportEnvelope ?? undefined}
                     compactions={compactions}
                     isCompacting={isCompacting}
@@ -873,7 +801,7 @@ export function ChatView() {
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
             >
-                {!apiKey ? (
+                {!provider ? (
                     <div className="flex items-center gap-2 bg-amber-50 rounded-xl p-3 border border-amber-200">
                         <KeyRound className="w-4 h-4 text-amber-600" />
                         <input
@@ -924,19 +852,21 @@ export function ChatView() {
 
                         <div className="flex items-end gap-2">
                             {/* Hidden file input */}
-                            <input
-                                ref={fileInputRef}
-                                type="file"
-                                accept="image/jpeg,image/png,image/webp,image/gif"
-                                multiple
-                                className="hidden"
-                                onChange={handleFileSelect}
-                            />
+                            {provider?.capabilities.supportsImages && (
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    accept="image/jpeg,image/png,image/webp,image/gif"
+                                    multiple
+                                    className="hidden"
+                                    onChange={handleFileSelect}
+                                />
+                            )}
                             <button
                                 onClick={() => fileInputRef.current?.click()}
-                                disabled={isTyping}
+                                disabled={isTyping || !provider?.capabilities.supportsImages}
                                 className="shrink-0 p-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-500 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 disabled:opacity-50 transition-colors"
-                                title="Attach image"
+                                title={provider?.capabilities.supportsImages ? 'Attach image' : 'Current provider does not support image input'}
                             >
                                 <Paperclip className="w-4 h-4" />
                             </button>
@@ -957,7 +887,7 @@ export function ChatView() {
                                     isDraggingOver ? 'Drop image here...' :
                                     !activeNodeId ? 'Start a new conversation...' :
                                     path[path.length - 1]?.role === 'user' ? 'Try an alternative prompt...' :
-                                    'Reply or paste an image...'
+                                    provider?.capabilities.supportsImages ? 'Reply or paste an image...' : 'Reply to this message...'
                                 }
                                 className="flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 pl-4 py-3.5 pr-4 text-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all shadow-inner disabled:opacity-50 overflow-y-auto"
                                 rows={1}

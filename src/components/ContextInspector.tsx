@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Loader2, RefreshCw, ChevronDown, ChevronRight, Database, MessageSquare, Paperclip, Layers, Lock, Zap, Scissors, X, AlertTriangle } from 'lucide-react';
 import type { AttachmentPart, CompactionBlock, ImportedConversationEnvelope, MessageNode } from '../store/types';
-import { buildSystemInstruction, countTokens } from '../lib/geminiEngine';
+import type { IProvider } from '../lib/providers';
 import { reconstructMemory } from '../lib/memoryEngine';
 
 const COMPACT_WARNING_TOKENS = 80_000;
@@ -47,7 +47,7 @@ interface ContextInspectorProps {
     path: MessageNode[];
     pendingInput: string;
     pendingAttachments: AttachmentPart[];
-    apiKey: string | null;
+    provider: IProvider | null;
     importEnvelope?: ImportedConversationEnvelope;
     compactions: Record<string, CompactionBlock>;
     isCompacting: boolean;
@@ -56,29 +56,24 @@ interface ContextInspectorProps {
     onRemoveCompaction: (id: string) => void;
 }
 
-export function ContextInspector({ path, pendingInput, pendingAttachments, apiKey, importEnvelope, compactions, isCompacting, canCompact, onCompactPath, onRemoveCompaction }: ContextInspectorProps) {
+export function ContextInspector({ path, pendingInput, pendingAttachments, provider, importEnvelope, compactions, isCompacting, canCompact, onCompactPath, onRemoveCompaction }: ContextInspectorProps) {
     const [exactTokens, setExactTokens] = useState<number | null>(null);
     const [isCounting, setIsCounting] = useState(false);
     const [countError, setCountError] = useState<string | null>(null);
     const [memoryExpanded, setMemoryExpanded] = useState(false);
 
     const memoryState = reconstructMemory(path);
-    const systemInstruction = buildSystemInstruction(memoryState);
+    const providerEstimate = provider?.estimateContext(memoryState, pendingAttachments);
 
     // Rough estimates
-    const cacheableTokens = roughTokens(systemInstruction);
+    const cacheableTokens = providerEstimate?.cacheableTokens ?? 0;
     const conversationTokens = path.reduce((sum, node) => {
         const textLen = node.content.length + (node.events ?? []).reduce((s, e) =>
             s + ('text' in e ? e.text.length : 0), 0);
         return sum + roughTokens('x'.repeat(textLen));
     }, 0);
     const pendingInputTokens = pendingInput.trim() ? roughTokens(pendingInput.trim()) : 0;
-    // Attachments: base64 length * 0.75 = raw bytes; Gemini charges ~258 tokens per image tile (768px)
-    const attachmentTokenEstimate = pendingAttachments.reduce((sum, att) => {
-        const rawBytes = att.data.length * 0.75;
-        const estimatedTiles = Math.ceil(rawBytes / (768 * 768 * 3));
-        return sum + Math.max(258, estimatedTiles * 258);
-    }, 0);
+    const attachmentTokenEstimate = providerEstimate?.attachmentTokens ?? 0;
     const totalRoughTokens = cacheableTokens + conversationTokens + pendingInputTokens + attachmentTokenEstimate;
 
     const userNodes = path.filter((n) => n.role === 'user').length;
@@ -87,11 +82,11 @@ export function ContextInspector({ path, pendingInput, pendingAttachments, apiKe
     const totalAttachmentsInPath = path.reduce((sum, n) => sum + (n.attachments?.length ?? 0), 0);
 
     const handleCountExact = async () => {
-        if (!apiKey) return;
+        if (!provider) return;
         setIsCounting(true);
         setCountError(null);
         try {
-            const total = await countTokens(path, memoryState, apiKey, compactions, pendingInput, pendingAttachments);
+            const total = await provider.countTokens(path, memoryState, compactions, pendingInput, pendingAttachments);
             setExactTokens(total);
         } catch (err) {
             setCountError(err instanceof Error ? err.message : 'Count failed');
@@ -119,10 +114,12 @@ export function ContextInspector({ path, pendingInput, pendingAttachments, apiKe
                         {isExact ? displayTotal.toLocaleString() : formatTokens(displayTotal)} tokens
                         {!isExact && <span className="ml-1 text-[11px] font-normal text-slate-400">(est.)</span>}
                     </span>
-                    <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-                        <span className="h-2 w-2 rounded-full bg-emerald-400 inline-block" />
-                        <span>Cacheable {formatTokens(cacheableTokens)}</span>
-                    </div>
+                    {provider?.capabilities.supportsCaching && (
+                        <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                            <span className="h-2 w-2 rounded-full bg-emerald-400 inline-block" />
+                            <span>Cacheable {formatTokens(cacheableTokens)}</span>
+                        </div>
+                    )}
                     <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
                         <span className="h-2 w-2 rounded-full bg-blue-400 inline-block" />
                         <span>Conversation {formatTokens(conversationTokens)}</span>
@@ -142,9 +139,9 @@ export function ContextInspector({ path, pendingInput, pendingAttachments, apiKe
                 </div>
                 <button
                     onClick={handleCountExact}
-                    disabled={isCounting || !apiKey}
+                    disabled={isCounting || !provider}
                     className="shrink-0 flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 hover:border-blue-300 hover:text-blue-600 disabled:opacity-40 transition-colors"
-                    title={!apiKey ? 'API key required' : 'Count exact tokens via Gemini API'}
+                    title={!provider ? 'Provider not configured' : 'Count exact tokens via API'}
                 >
                     {isCounting
                         ? <Loader2 className="h-3 w-3 animate-spin" />
@@ -176,10 +173,12 @@ export function ContextInspector({ path, pendingInput, pendingAttachments, apiKe
                     <span>Memory: <span className="font-medium text-slate-800">{formatBytes(memoryState.length)}</span></span>
                     {totalPatches > 0 && <span className="text-slate-400">({totalPatches} patches)</span>}
                 </div>
-                <div className="flex items-center gap-1.5 text-slate-600">
-                    <Lock className="h-3 w-3 shrink-0 text-emerald-500" />
-                    <span>Cacheable prefix: <span className="font-medium text-slate-800">{formatTokens(cacheableTokens)}</span></span>
-                </div>
+                {provider?.capabilities.supportsCaching && (
+                    <div className="flex items-center gap-1.5 text-slate-600">
+                        <Lock className="h-3 w-3 shrink-0 text-emerald-500" />
+                        <span>Cacheable prefix: <span className="font-medium text-slate-800">{formatTokens(cacheableTokens)}</span></span>
+                    </div>
+                )}
                 <div className="flex items-center gap-1.5 text-slate-600">
                     <Zap className="h-3 w-3 shrink-0 text-blue-400" />
                     <span>Dynamic suffix: <span className="font-medium text-slate-800">{formatTokens(conversationTokens)}</span></span>
@@ -258,9 +257,9 @@ export function ContextInspector({ path, pendingInput, pendingAttachments, apiKe
                     </div>
                     <button
                         onClick={onCompactPath}
-                        disabled={!canCompact || isCompacting || !apiKey}
+                        disabled={!canCompact || isCompacting || !provider}
                         className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:border-violet-300 hover:text-violet-700 disabled:opacity-40 transition-colors"
-                        title={!apiKey ? 'API key required' : !canCompact ? 'Path too short to compact' : 'Compact older context into a summary'}
+                        title={!provider ? 'Provider not configured' : !canCompact ? 'Path too short to compact' : 'Compact older context into a summary'}
                     >
                         {isCompacting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Scissors className="h-3 w-3" />}
                         Compact older context
