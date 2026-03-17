@@ -1,9 +1,10 @@
 import { startTransition, useEffect, useRef, useState } from 'react';
-import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon } from 'lucide-react';
+import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, ScanText } from 'lucide-react';
 import type { Content, FunctionCall, GenerateContentResponse, Part } from '@google/genai';
 import { useGraphStore } from '../store/useGraphStore';
-import type { AttachmentMimeType, AttachmentPart, ChatEvent, MessageNode } from '../store/types';
+import type { AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, MessageNode } from '../store/types';
 import {
+    compactPathNodes,
     createFunctionResponseContent,
     createModelToolCallContent,
     extractAssistantEvents,
@@ -19,6 +20,7 @@ import { reconstructMemory } from '../lib/memoryEngine';
 import { SessionsModal } from './SessionsModal';
 import { ImportSuggestionsModal } from './ImportSuggestionsModal';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { ContextInspector } from './ContextInspector';
 
 function getTextSummary(text: string): string {
     return text.length > 40 ? `${text.slice(0, 40)}...` : text;
@@ -351,6 +353,9 @@ export function ChatView() {
         clearImportPreview,
         undoLastImportApply,
         lastImportApplySnapshot,
+        compactions,
+        addCompaction,
+        removeCompaction,
     } = useGraphStore();
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
@@ -360,6 +365,8 @@ export function ChatView() {
     const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
     const [attachments, setAttachments] = useState<AttachmentPart[]>([]);
     const [isDraggingOver, setIsDraggingOver] = useState(false);
+    const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+    const [isCompacting, setIsCompacting] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -433,6 +440,42 @@ export function ChatView() {
         abortControllerRef.current?.abort();
     };
 
+    // Keep the most recent 6 nodes (3 exchanges); compact everything before that boundary.
+    const KEEP_RECENT_NODES = 6;
+    const getCompactionRange = (): MessageNode[] | null => {
+        if (path.length <= KEEP_RECENT_NODES) return null;
+        let cutPoint = path.length - KEEP_RECENT_NODES;
+        // Snap backward to the start of a user message so we never split an exchange
+        while (cutPoint > 0 && path[cutPoint]?.role !== 'user') cutPoint--;
+        if (cutPoint <= 0) return null;
+        return path.slice(0, cutPoint);
+    };
+
+    const handleCompactPath = async () => {
+        if (!apiKey || isCompacting) return;
+        const toCompact = getCompactionRange();
+        if (!toCompact || toCompact.length === 0) return;
+        setIsCompacting(true);
+        try {
+            const summary = await compactPathNodes(toCompact, apiKey);
+            if (summary) {
+                const block: CompactionBlock = {
+                    id: crypto.randomUUID(),
+                    nodeIds: toCompact.map((n) => n.id),
+                    summary,
+                    tokensBefore: Math.ceil(toCompact.reduce((s, n) => s + n.content.length, 0) / 4),
+                    createdAt: new Date().toISOString(),
+                };
+                addCompaction(block);
+            }
+        } catch (err) {
+            console.error('Compaction failed:', err);
+            alert('Compaction failed. Check console.');
+        } finally {
+            setIsCompacting(false);
+        }
+    };
+
     const handleSend = async () => {
         if ((!input.trim() && attachments.length === 0) || !apiKey) return;
 
@@ -460,7 +503,7 @@ export function ChatView() {
         try {
             const newPath = getPath(userNodeId);
             const memoryState = reconstructMemory(newPath);
-            const initialStream = await generateGeminiResponseStream(newPath, memoryState, apiKey, controller.signal);
+            const initialStream = await generateGeminiResponseStream(newPath, memoryState, apiKey, controller.signal, compactions);
             const initialResponse = await collectStreamedAssistantResponse(
                 initialStream,
                 setStreamingEvents,
@@ -607,14 +650,42 @@ export function ChatView() {
                     <h1 className="text-xl font-bold tracking-tight text-slate-800">MemoTree</h1>
                     <p className="text-xs font-medium text-slate-400">Time-Traveling LLM Interface</p>
                 </div>
-                <button
-                    onClick={() => setIsSessionsOpen(true)}
-                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
-                >
-                    <FolderOpen className="h-3.5 w-3.5" />
-                    <span>Sessions</span>
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => setIsInspectorOpen((v) => !v)}
+                        className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${
+                            isInspectorOpen
+                                ? 'border-blue-300 bg-blue-50 text-blue-700'
+                                : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700'
+                        }`}
+                        title="Toggle context inspector"
+                    >
+                        <ScanText className="h-3.5 w-3.5" />
+                        <span>Context</span>
+                    </button>
+                    <button
+                        onClick={() => setIsSessionsOpen(true)}
+                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                    >
+                        <FolderOpen className="h-3.5 w-3.5" />
+                        <span>Sessions</span>
+                    </button>
+                </div>
             </div>
+            {isInspectorOpen && (
+                <ContextInspector
+                    path={path}
+                    pendingInput={input}
+                    pendingAttachments={attachments}
+                    apiKey={apiKey}
+                    importEnvelope={visibleImportEnvelope ?? undefined}
+                    compactions={compactions}
+                    isCompacting={isCompacting}
+                    canCompact={getCompactionRange() !== null}
+                    onCompactPath={handleCompactPath}
+                    onRemoveCompaction={removeCompaction}
+                />
+            )}
 
             <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50 scroll-smooth">
                 {visibleImportEnvelope && (

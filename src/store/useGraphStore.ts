@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type {
+    CompactionBlock,
     ContextGroup,
     ImportedTurn,
     ImportSourcePlatform,
@@ -42,6 +43,8 @@ interface GraphState extends ConversationGraph {
     toggleNodeSelection: (id: string) => void;
     setSelectedNodeIds: (ids: string[]) => void;
     clearNodeSelection: () => void;
+    addCompaction: (block: CompactionBlock) => void;
+    removeCompaction: (id: string) => void;
     createGroup: (group: Omit<ContextGroup, 'id'>) => string;
     addNode: (node: Omit<MessageNode, 'id' | 'timestamp'>) => string;
     setUiPosition: (id: string, position: { x: number; y: number }) => void;
@@ -63,6 +66,7 @@ function createEmptySessionState() {
         nodes: {},
         groups: {},
         uiPositions: {},
+        compactions: {},
         rootId: null,
         activeNodeId: null,
         importEnvelope: undefined,
@@ -143,6 +147,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 ...savedSession.graph,
                 groups: savedSession.graph.groups ?? {},
                 uiPositions: savedSession.graph.uiPositions ?? {},
+                compactions: savedSession.graph.compactions ?? {},
                 sessionId: savedSession.id,
                 createdAt: savedSession.createdAt,
                 apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
@@ -187,6 +192,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             ...savedSession.graph,
             groups: savedSession.graph.groups ?? {},
             uiPositions: savedSession.graph.uiPositions ?? {},
+                compactions: savedSession.graph.compactions ?? {},
             sessionId: savedSession.id,
             createdAt: savedSession.createdAt,
             apiKey: get().apiKey,
@@ -248,6 +254,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             nodes,
             groups: {},
             uiPositions: {},
+            compactions: {},
             rootId,
             activeNodeId: previousNodeId,
             importEnvelope: {
@@ -381,6 +388,27 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             previewImportEnvelope: null,
             lastImportApplySnapshot: null,
         };
+    }),
+
+    addCompaction: (block) => set((state) => {
+        const nextNodeIds = new Set(block.nodeIds);
+        const preserved = Object.fromEntries(
+            Object.entries(state.compactions).filter(([, existing]) =>
+                !existing.nodeIds.some((id) => nextNodeIds.has(id)),
+            ),
+        );
+        return {
+            compactions: {
+                ...preserved,
+                [block.id]: block,
+            },
+        };
+    }),
+
+    removeCompaction: (id) => set((state) => {
+        const rest = { ...state.compactions };
+        delete rest[id];
+        return { compactions: rest };
     }),
 
     toggleNodeSelection: (id) => set((state) => {
@@ -588,6 +616,7 @@ useGraphStore.subscribe((state) => {
         nodes: state.nodes,
         groups: state.groups,
         uiPositions: state.uiPositions,
+        compactions: state.compactions,
         rootId: state.rootId,
         activeNodeId: state.activeNodeId,
         importEnvelope: state.importEnvelope,
@@ -607,6 +636,7 @@ useGraphStore.subscribe((state) => {
             nodes: state.nodes,
             groups: state.groups,
             uiPositions: state.uiPositions,
+            compactions: state.compactions,
             rootId: state.rootId,
             activeNodeId: state.activeNodeId,
             importEnvelope: state.importEnvelope,
@@ -615,6 +645,7 @@ useGraphStore.subscribe((state) => {
             nodes: state.nodes,
             groups: state.groups,
             uiPositions: state.uiPositions,
+            compactions: state.compactions,
             rootId: state.rootId,
             activeNodeId: state.activeNodeId,
             importEnvelope: state.importEnvelope,

@@ -149,6 +149,16 @@ export interface GraphUiPosition {
     y: number;
 }
 
+export interface CompactionBlock {
+    id: string;
+    /** Ordered node IDs covered by this compaction (contiguous range from path start). */
+    nodeIds: string[];
+    summary: string;
+    /** Rough token estimate of the nodes before compaction. */
+    tokensBefore?: number;
+    createdAt: string;
+}
+
 export interface MessageNode {
     id: string;
     parentId: string | null;
@@ -171,6 +181,7 @@ export interface ConversationGraph {
     nodes: Record<string, MessageNode>;
     groups: Record<string, ContextGroup>;
     uiPositions: Record<string, GraphUiPosition>;
+    compactions: Record<string, CompactionBlock>;
     rootId: string | null;
     activeNodeId: string | null;
     apiKey: string | null;

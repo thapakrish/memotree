@@ -9,7 +9,7 @@ import {
     createPartFromFunctionResponse,
     createUserContent,
 } from '@google/genai';
-import type { ChatEvent, MessageNode, MemoryPatch } from '../store/types';
+import type { AttachmentPart, ChatEvent, CompactionBlock, MessageNode, MemoryPatch } from '../store/types';
 import { computePatch } from './memoryEngine';
 import { getFinalAnswerText } from './chatEvents';
 
@@ -173,15 +173,154 @@ export function buildGeminiContents(chatPath: MessageNode[]): Content[] {
     return toGeminiContents(chatPath);
 }
 
-function getGenerationConfig(memoryState: string) {
-    return {
-        systemInstruction: `You are MemoTree AI.
+function buildPendingDraftContent(
+    pendingText?: string,
+    pendingAttachments?: AttachmentPart[],
+): Content[] {
+    const hasText = Boolean(pendingText?.trim());
+    const hasAttachments = (pendingAttachments?.length ?? 0) > 0;
+    if (!hasText && !hasAttachments) {
+        return [];
+    }
+
+    const parts: Part[] = [];
+    if (hasText) {
+        parts.push({ text: pendingText!.trim() });
+    }
+    for (const attachment of pendingAttachments ?? []) {
+        parts.push({
+            inlineData: {
+                mimeType: attachment.mimeType,
+                data: attachment.data,
+            },
+        });
+    }
+    return [{ role: 'user', parts }];
+}
+
+export function buildGeminiContentsWithCompaction(
+    chatPath: MessageNode[],
+    compactions: Record<string, CompactionBlock>,
+): Content[] {
+    const blocks = Object.values(compactions);
+    if (blocks.length === 0) return toGeminiContents(chatPath);
+
+    const pathNodeIds = new Set(chatPath.map((n) => n.id));
+
+    // Only use blocks where every nodeId is present in this path
+    const pathIndexById = new Map(chatPath.map((node, index) => [node.id, index]));
+    const applicable = blocks
+        .filter((b) => b.nodeIds.every((id) => pathNodeIds.has(id)))
+        .sort((left, right) => {
+            const leftIndex = pathIndexById.get(left.nodeIds[0]) ?? Number.MAX_SAFE_INTEGER;
+            const rightIndex = pathIndexById.get(right.nodeIds[0]) ?? Number.MAX_SAFE_INTEGER;
+            return leftIndex - rightIndex;
+        });
+    if (applicable.length === 0) return toGeminiContents(chatPath);
+
+    const compactedIds = new Set<string>();
+    const blockByFirstNode = new Map<string, CompactionBlock>();
+    for (const block of applicable) {
+        for (const id of block.nodeIds) compactedIds.add(id);
+        blockByFirstNode.set(block.nodeIds[0], block);
+    }
+
+    const contents: Content[] = [];
+    let i = 0;
+    while (i < chatPath.length) {
+        const node = chatPath[i];
+        if (blockByFirstNode.has(node.id)) {
+            const block = blockByFirstNode.get(node.id)!;
+            contents.push({ role: 'user', parts: [{ text: `[Compacted context summary]\n${block.summary}` }] });
+            contents.push({ role: 'model', parts: [{ text: 'Understood. I have the context from the earlier summary.' }] });
+            i += block.nodeIds.length;
+        } else if (compactedIds.has(node.id)) {
+            i++;
+        } else {
+            contents.push({
+                role: node.role === 'assistant' ? 'model' : 'user',
+                parts: toModelParts(node),
+            });
+            i++;
+        }
+    }
+    return contents;
+}
+
+export async function compactPathNodes(
+    nodes: MessageNode[],
+    apiKey: string,
+): Promise<string> {
+    const client = initGemini(apiKey);
+    const transcript = nodes.map((n) => {
+        const role = n.role === 'assistant' ? 'Assistant' : 'User';
+        const segments: string[] = [];
+
+        if (n.role === 'assistant') {
+            const thoughts = (n.events ?? [])
+                .filter((event) => event.kind === 'thought')
+                .map((event) => event.text.trim())
+                .filter(Boolean);
+            const toolCalls = (n.events ?? [])
+                .filter((event) => event.kind === 'tool_call')
+                .map((event) => `${event.toolName}(${JSON.stringify(event.args)})`);
+            const toolResults = (n.events ?? [])
+                .filter((event) => event.kind === 'tool_result')
+                .map((event) => `${event.summary}${event.payload !== undefined ? ` | payload: ${JSON.stringify(event.payload)}` : ''}`);
+            const finalText = getFinalAnswerText(n.events ?? []) || n.content;
+
+            if (thoughts.length > 0) {
+                segments.push(`Thought summaries: ${thoughts.join(' | ')}`);
+            }
+            if (toolCalls.length > 0) {
+                segments.push(`Tool calls: ${toolCalls.join(' ; ')}`);
+            }
+            if (toolResults.length > 0) {
+                segments.push(`Tool results: ${toolResults.join(' ; ')}`);
+            }
+            if (finalText.trim()) {
+                segments.push(`Reply: ${finalText}`);
+            }
+        } else {
+            if (n.content.trim()) {
+                segments.push(`Text: ${n.content}`);
+            }
+            if ((n.attachments?.length ?? 0) > 0) {
+                segments.push(`Attachments: ${n.attachments!.map((attachment) => `${attachment.kind}:${attachment.mimeType}${attachment.name ? ` (${attachment.name})` : ''}`).join(', ')}`);
+            }
+        }
+
+        if ((n.memoryPatches?.length ?? 0) > 0) {
+            segments.push(`Memory patches: ${n.memoryPatches.map((patch) => patch.diffText).join(' || ')}`);
+        }
+
+        return `${role}: ${segments.join('\n')}`.trim();
+    }).join('\n\n');
+
+    const response = await client.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: createUserContent([{
+            text: `Summarize this conversation segment concisely for context compaction. Preserve all important facts, decisions, attachments, tool calls, tool results, memory updates, and context needed to continue the conversation naturally. Write in past tense. Omit pleasantries, but do not omit technical or factual details that later turns may rely on.\n\n${transcript}`,
+        }]),
+        config: { thinkingConfig: { includeThoughts: false } },
+    });
+
+    return response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
+}
+
+export function buildSystemInstruction(memoryState: string): string {
+    return `You are MemoTree AI.
 You have access to a text_editor tool to save long-term facts in /memories/.
 <memory_files>
 /memories/facts.json:
 ${memoryState}
 </memory_files>
-CRITICAL: EASE Protocol active. No JSON arrays allowed in memory files. Use key-value only.`,
+CRITICAL: EASE Protocol active. No JSON arrays allowed in memory files. Use key-value only.`;
+}
+
+function getGenerationConfig(memoryState: string) {
+    return {
+        systemInstruction: buildSystemInstruction(memoryState),
         tools: [{
             functionDeclarations: [TEXT_EDITOR_TOOL],
         }],
@@ -189,6 +328,29 @@ CRITICAL: EASE Protocol active. No JSON arrays allowed in memory files. Use key-
             includeThoughts: true,
         },
     };
+}
+
+export async function countTokens(
+    chatPath: MessageNode[],
+    memoryState: string,
+    apiKey: string,
+    compactions?: Record<string, CompactionBlock>,
+    pendingText?: string,
+    pendingAttachments?: AttachmentPart[],
+): Promise<number> {
+    const client = initGemini(apiKey);
+    const response = await client.models.countTokens({
+        model: 'gemini-2.5-flash',
+        contents: [
+            ...buildGeminiContentsWithCompaction(chatPath, compactions ?? {}),
+            ...buildPendingDraftContent(pendingText, pendingAttachments),
+        ],
+        config: {
+            systemInstruction: buildSystemInstruction(memoryState),
+            tools: [{ functionDeclarations: [TEXT_EDITOR_TOOL] }],
+        },
+    });
+    return response.totalTokens ?? 0;
 }
 
 async function* abortableStream(
@@ -245,9 +407,10 @@ export async function generateGeminiResponseStream(
     memoryState: string,
     apiKey: string,
     signal?: AbortSignal,
+    compactions?: Record<string, CompactionBlock>,
 ) {
     return generateGeminiResponseStreamFromContents(
-        toGeminiContents(chatPath),
+        buildGeminiContentsWithCompaction(chatPath, compactions ?? {}),
         memoryState,
         apiKey,
         signal,
