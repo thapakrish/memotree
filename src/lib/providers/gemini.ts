@@ -51,6 +51,7 @@ async function* normalizeStream(
 
 const GEMINI_CAPABILITIES: ProviderCapabilities = {
     supportsImages: true,
+    supportsFileAttachments: true,
     supportsCaching: true,
     supportsThinking: true,
     maxContextTokens: 1_000_000,

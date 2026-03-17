@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
-import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, ScanText } from 'lucide-react';
+import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, FileText, Music, ScanText } from 'lucide-react';
 import { useGraphStore } from '../store/useGraphStore';
 import type { AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, MessageNode } from '../store/types';
 import { getAssistantText, interceptMemoryTool } from '../lib/geminiEngine';
@@ -32,6 +32,10 @@ function normalizeToolArgs(args: unknown): Record<string, string> {
 }
 
 const SUPPORTED_IMAGE_TYPES: AttachmentMimeType[] = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+const SUPPORTED_PDF_TYPES: AttachmentMimeType[] = ['application/pdf'];
+const SUPPORTED_AUDIO_TYPES: AttachmentMimeType[] = ['audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg', 'audio/webm', 'audio/flac'];
+const MAX_PDF_BYTES = 20 * 1024 * 1024;  // 20 MB
+const MAX_AUDIO_BYTES = 25 * 1024 * 1024; // 25 MB
 const MAX_IMAGE_DIM = 2048;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
@@ -117,6 +121,39 @@ async function processImageFile(
                 );
             };
             img.src = dataUrl;
+        };
+        reader.readAsDataURL(file);
+    });
+}
+
+async function processBinaryFile(
+    file: File,
+    sourceType: AttachmentPart['sourceType'],
+): Promise<AttachmentPart | null> {
+    const mimeType = file.type as AttachmentMimeType;
+    const isPdf = SUPPORTED_PDF_TYPES.includes(mimeType);
+    const isAudio = SUPPORTED_AUDIO_TYPES.includes(mimeType);
+    if (!isPdf && !isAudio) return null;
+
+    const maxBytes = isPdf ? MAX_PDF_BYTES : MAX_AUDIO_BYTES;
+    if (file.size > maxBytes) return null;
+
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onerror = () => resolve(null);
+        reader.onload = (e) => {
+            const dataUrl = e.target?.result as string;
+            const base64 = dataUrl?.split(',', 2)[1];
+            if (!base64) { resolve(null); return; }
+            resolve({
+                id: crypto.randomUUID(),
+                kind: isPdf ? 'pdf' : 'audio',
+                mimeType,
+                data: base64,
+                name: file.name || undefined,
+                sizeBytes: file.size,
+                sourceType,
+            });
         };
         reader.readAsDataURL(file);
     });
@@ -331,9 +368,15 @@ export function ChatView() {
         }
     };
 
+    const isAttachableFile = (type: string) =>
+        type.startsWith('image/') || type === 'application/pdf' || type.startsWith('audio/');
+
+    const processAnyFile = (f: File, src: AttachmentPart['sourceType']) =>
+        f.type.startsWith('image/') ? processImageFile(f, src) : processBinaryFile(f, src);
+
     const handleDragOver = (e: React.DragEvent) => {
-        if (!provider?.capabilities.supportsImages) return;
-        if (Array.from(e.dataTransfer.items).some((item) => item.type.startsWith('image/'))) {
+        if (!provider?.capabilities.supportsFileAttachments) return;
+        if (Array.from(e.dataTransfer.items).some((item) => isAttachableFile(item.type))) {
             e.preventDefault();
             setIsDraggingOver(true);
         }
@@ -342,18 +385,18 @@ export function ChatView() {
     const handleDragLeave = () => setIsDraggingOver(false);
 
     const handleDrop = async (e: React.DragEvent) => {
-        if (!provider?.capabilities.supportsImages) return;
+        if (!provider?.capabilities.supportsFileAttachments) return;
         e.preventDefault();
         setIsDraggingOver(false);
-        const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'));
-        const parts = await Promise.all(files.map((f) => processImageFile(f, 'drop')));
+        const files = Array.from(e.dataTransfer.files).filter((f) => isAttachableFile(f.type));
+        const parts = await Promise.all(files.map((f) => processAnyFile(f, 'drop')));
         addAttachments(parts.filter(Boolean) as AttachmentPart[]);
     };
 
     const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (!provider?.capabilities.supportsImages) return;
+        if (!provider?.capabilities.supportsFileAttachments) return;
         const files = Array.from(e.target.files ?? []);
-        const parts = await Promise.all(files.map((f) => processImageFile(f, 'file')));
+        const parts = await Promise.all(files.map((f) => processAnyFile(f, 'file')));
         addAttachments(parts.filter(Boolean) as AttachmentPart[]);
         e.target.value = '';
     };
@@ -476,14 +519,23 @@ export function ChatView() {
                     }
 
                     const toolArgs = normalizeToolArgs(call.args);
-                    const { patch, updatedMemory } = interceptMemoryTool(
+                    const { patch, updatedMemory, validationError } = interceptMemoryTool(
                         toolArgs,
                         nextMemoryState,
                     );
-                    patches.push(patch);
-                    nextMemoryState = updatedMemory;
+                    if (!validationError) {
+                        patches.push(patch);
+                        nextMemoryState = updatedMemory;
+                    }
 
-                    const toolResultEvent: ChatEvent = {
+                    const toolResultEvent: ChatEvent = validationError ? {
+                        kind: 'tool_result',
+                        toolName: call.name,
+                        callId: call.id,
+                        status: 'error',
+                        summary: `Memory validation failed: ${validationError}`,
+                        payload: { validationError, toolArgs },
+                    } : {
                         kind: 'tool_result',
                         toolName: call.name,
                         callId: call.id,
@@ -499,10 +551,9 @@ export function ChatView() {
                     functionResponses.push({
                         id: call.id,
                         name: call.name,
-                        response: {
-                            output: toolResultEvent.summary,
-                            fileText: updatedMemory,
-                        },
+                        response: validationError
+                            ? { error: toolResultEvent.summary }
+                            : { output: toolResultEvent.summary, fileText: updatedMemory },
                     });
                 }
 
@@ -735,12 +786,19 @@ export function ChatView() {
                                         {(msg.attachments?.length ?? 0) > 0 && (
                                             <div className="mb-2 flex flex-wrap gap-2">
                                                 {msg.attachments!.map((att) => (
-                                                    <img
-                                                        key={att.id}
-                                                        src={`data:${att.mimeType};base64,${att.data}`}
-                                                        alt={att.name ?? 'attachment'}
-                                                        className="max-h-48 max-w-full rounded-lg object-contain"
-                                                    />
+                                                    att.kind === 'image' ? (
+                                                        <img
+                                                            key={att.id}
+                                                            src={`data:${att.mimeType};base64,${att.data}`}
+                                                            alt={att.name ?? 'attachment'}
+                                                            className="max-h-48 max-w-full rounded-lg object-contain"
+                                                        />
+                                                    ) : (
+                                                        <div key={att.id} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium ${att.kind === 'pdf' ? 'border-red-200 bg-red-50 text-red-700' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
+                                                            {att.kind === 'pdf' ? <FileText className="h-3.5 w-3.5 shrink-0" /> : <Music className="h-3.5 w-3.5 shrink-0" />}
+                                                            <span className="truncate max-w-[200px]">{att.name ?? att.kind.toUpperCase()}</span>
+                                                        </div>
+                                                    )
                                                 ))}
                                             </div>
                                         )}
@@ -821,11 +879,22 @@ export function ChatView() {
                             <div className="flex flex-wrap gap-2">
                                 {attachments.map((att) => (
                                     <div key={att.id} className="group/chip relative rounded-lg overflow-hidden border border-slate-200 shadow-sm">
-                                        <img
-                                            src={`data:${att.mimeType};base64,${att.data}`}
-                                            alt={att.name ?? 'image'}
-                                            className="h-16 w-16 object-cover"
-                                        />
+                                        {att.kind === 'image' ? (
+                                            <img
+                                                src={`data:${att.mimeType};base64,${att.data}`}
+                                                alt={att.name ?? 'image'}
+                                                className="h-16 w-16 object-cover"
+                                            />
+                                        ) : (
+                                            <div className={`h-16 w-16 flex flex-col items-center justify-center gap-1 ${att.kind === 'pdf' ? 'bg-red-50' : 'bg-indigo-50'}`}>
+                                                {att.kind === 'pdf'
+                                                    ? <FileText className="h-6 w-6 text-red-400" />
+                                                    : <Music className="h-6 w-6 text-indigo-400" />}
+                                                <span className="text-[9px] font-medium text-slate-500 truncate max-w-[56px] px-1">
+                                                    {att.name ?? att.kind.toUpperCase()}
+                                                </span>
+                                            </div>
+                                        )}
                                         <button
                                             onClick={() => removeAttachment(att.id)}
                                             className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover/chip:opacity-100 transition-opacity"
@@ -846,17 +915,17 @@ export function ChatView() {
                         {isDraggingOver && attachments.length === 0 && (
                             <div className="flex items-center justify-center gap-2 rounded-xl border-2 border-dashed border-blue-400 bg-blue-50 py-4 text-sm font-medium text-blue-600">
                                 <ImageIcon className="h-4 w-4" />
-                                Drop image to attach
+                                Drop file to attach
                             </div>
                         )}
 
                         <div className="flex items-end gap-2">
                             {/* Hidden file input */}
-                            {provider?.capabilities.supportsImages && (
+                            {provider?.capabilities.supportsFileAttachments && (
                                 <input
                                     ref={fileInputRef}
                                     type="file"
-                                    accept="image/jpeg,image/png,image/webp,image/gif"
+                                    accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/webm,audio/flac"
                                     multiple
                                     className="hidden"
                                     onChange={handleFileSelect}
@@ -864,9 +933,9 @@ export function ChatView() {
                             )}
                             <button
                                 onClick={() => fileInputRef.current?.click()}
-                                disabled={isTyping || !provider?.capabilities.supportsImages}
+                                disabled={isTyping || !provider?.capabilities.supportsFileAttachments}
                                 className="shrink-0 p-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-500 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 disabled:opacity-50 transition-colors"
-                                title={provider?.capabilities.supportsImages ? 'Attach image' : 'Current provider does not support image input'}
+                                title={provider?.capabilities.supportsFileAttachments ? 'Attach file' : 'Current provider does not support file attachments'}
                             >
                                 <Paperclip className="w-4 h-4" />
                             </button>
@@ -887,7 +956,7 @@ export function ChatView() {
                                     isDraggingOver ? 'Drop image here...' :
                                     !activeNodeId ? 'Start a new conversation...' :
                                     path[path.length - 1]?.role === 'user' ? 'Try an alternative prompt...' :
-                                    provider?.capabilities.supportsImages ? 'Reply or paste an image...' : 'Reply to this message...'
+                                    provider?.capabilities.supportsFileAttachments ? 'Reply or attach a file...' : 'Reply to this message...'
                                 }
                                 className="flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 pl-4 py-3.5 pr-4 text-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all shadow-inner disabled:opacity-50 overflow-y-auto"
                                 rows={1}

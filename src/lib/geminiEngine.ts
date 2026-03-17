@@ -10,7 +10,7 @@ import {
     createUserContent,
 } from '@google/genai';
 import type { AttachmentPart, ChatEvent, CompactionBlock, MessageNode, MemoryPatch } from '../store/types';
-import { computePatch } from './memoryEngine';
+import { computePatch, validateEaseMemory } from './memoryEngine';
 import { getFinalAnswerText } from './chatEvents';
 
 let geminiClient: GoogleGenAI | null = null;
@@ -61,13 +61,20 @@ export const TEXT_EDITOR_TOOL: FunctionDeclaration = {
 export function interceptMemoryTool(
     toolArgs: Record<string, string>,
     currentMemoryState: string,
-): { updatedMemory: string; patch: MemoryPatch } {
+): { updatedMemory: string; patch: MemoryPatch; validationError?: string } {
     let newText = currentMemoryState;
 
     if (toolArgs.command === 'create') {
         newText = toolArgs.file_text || '{}';
     } else if (toolArgs.command === 'str_replace') {
         newText = currentMemoryState.replace(toolArgs.old_str, toolArgs.new_str);
+    }
+
+    // Validate EASE compliance before committing the patch
+    const validationError = validateEaseMemory(newText) ?? undefined;
+    if (validationError) {
+        // Return current state unchanged; caller should surface the error
+        return { updatedMemory: currentMemoryState, patch: { diffText: '' }, validationError };
     }
 
     const diffText = computePatch(currentMemoryState, newText);

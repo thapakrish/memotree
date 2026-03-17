@@ -11,7 +11,7 @@ import type {
     MemoryPatch,
     StructureSuggestion,
 } from './types';
-import { deriveSessionTitle, loadLastSession, loadSession, markLastSession, saveSession } from '../lib/sessionPersistence';
+import { deriveSessionTitle, loadLastSession, loadSession, markLastSession, saveSession, type PersistedSession, validatePersistedSession } from '../lib/sessionPersistence';
 import { applyAcceptedStructureSuggestions } from '../lib/import/applyStructureSuggestions';
 import { inferStructureRules } from '../lib/import/inferStructureRules';
 import { sanitizeImportedTurns } from '../lib/import/validateImportedTurns';
@@ -27,6 +27,7 @@ interface GraphState extends ConversationGraph {
     hydrateSession: () => Promise<void>;
     createNewSession: () => void;
     loadSessionById: (sessionId: string) => Promise<void>;
+    loadSessionFromData: (session: PersistedSession) => Promise<void>;
     importLinearTranscript: (payload: {
         sourcePlatform: ImportSourcePlatform;
         turns: ImportedTurn[];
@@ -201,6 +202,26 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             providerId: savedSession.graph.providerId ?? 'gemini',
             sessionId: savedSession.id,
             createdAt: savedSession.createdAt,
+            apiKey: get().apiKey,
+            isHydrated: true,
+            selectedNodeIds: [],
+            previewNodes: null,
+            previewImportEnvelope: null,
+            lastImportApplySnapshot: null,
+        });
+    },
+
+    loadSessionFromData: async (session) => {
+        const validatedSession = validatePersistedSession(session);
+        await markLastSession(validatedSession.id);
+        set({
+            ...validatedSession.graph,
+            groups: validatedSession.graph.groups ?? {},
+            uiPositions: validatedSession.graph.uiPositions ?? {},
+            compactions: validatedSession.graph.compactions ?? {},
+            providerId: validatedSession.graph.providerId ?? 'gemini',
+            sessionId: validatedSession.id,
+            createdAt: validatedSession.createdAt,
             apiKey: get().apiKey,
             isHydrated: true,
             selectedNodeIds: [],

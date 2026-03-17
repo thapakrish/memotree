@@ -2,6 +2,7 @@ import type { AttachmentPart, ChatEvent, CompactionBlock, MessageNode } from '..
 
 export interface ProviderCapabilities {
     supportsImages: boolean;
+    supportsFileAttachments: boolean;
     supportsCaching: boolean;
     supportsThinking: boolean;
     maxContextTokens: number;

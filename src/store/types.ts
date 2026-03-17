@@ -5,13 +5,18 @@ export interface MemoryPatch {
     diffText: string;
 }
 
-export type AttachmentMimeType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+export type AttachmentMimeType =
+    | 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
+    | 'application/pdf'
+    | 'audio/mpeg' | 'audio/mp4' | 'audio/wav' | 'audio/ogg' | 'audio/webm' | 'audio/flac';
+
+export type AttachmentKind = 'image' | 'pdf' | 'audio';
 
 export interface AttachmentPart {
     id: string;
-    kind: 'image';
+    kind: AttachmentKind;
     mimeType: AttachmentMimeType;
-    /** Base64-encoded image data (no data URL prefix). */
+    /** Base64-encoded file data (no data URL prefix). */
     data: string;
     name?: string;
     sizeBytes?: number;

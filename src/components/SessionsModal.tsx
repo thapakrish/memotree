@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import { Clock3, FolderOpen, History, Import, Plus, X } from 'lucide-react';
-import { listSessions, loadLastSession, type PersistedSession } from '../lib/sessionPersistence';
+import { useEffect, useRef, useState } from 'react';
+import { Clock3, Download, FolderOpen, History, Import, Plus, Upload, X } from 'lucide-react';
+import { deleteSession, exportSessionToFile, importSessionFromJson, listSessions, loadLastSession, type PersistedSession } from '../lib/sessionPersistence';
 import { useGraphStore } from '../store/useGraphStore';
 import { ImportChatModal } from './ImportChatModal';
 
@@ -13,7 +13,10 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
     const [sessions, setSessions] = useState<PersistedSession[]>([]);
     const [lastSessionId, setLastSessionId] = useState<string | null>(null);
     const [isImportOpen, setIsImportOpen] = useState(false);
-    const { createNewSession, loadSessionById, sessionId } = useGraphStore();
+    const [importError, setImportError] = useState<string | null>(null);
+    const [isImportingFile, setIsImportingFile] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const { createNewSession, loadSessionById, loadSessionFromData, sessionId } = useGraphStore();
 
     useEffect(() => {
         if (!isOpen) {
@@ -26,11 +29,42 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
         });
     }, [isOpen, sessionId]);
 
+    const refreshSessions = () => {
+        void Promise.all([listSessions(), loadLastSession()]).then(([allSessions, lastSession]) => {
+            setSessions(allSessions);
+            setLastSessionId(lastSession?.id ?? null);
+        });
+    };
+
+    const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setImportError(null);
+        setIsImportingFile(true);
+        try {
+            const imported = await importSessionFromJson(file);
+            await loadSessionFromData(imported);
+            refreshSessions();
+            onClose();
+        } catch (err) {
+            setImportError(err instanceof Error ? err.message : 'Import failed.');
+        } finally {
+            setIsImportingFile(false);
+            e.target.value = '';
+        }
+    };
+
+    const handleDeleteSession = async (sessionId: string) => {
+        await deleteSession(sessionId);
+        refreshSessions();
+    };
+
     if (!isOpen) {
         return null;
     }
 
     const recentSessions = sessions.filter((session) => session.id !== sessionId).slice(0, 12);
+    const currentSession = sessions.find((s) => s.id === sessionId);
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 backdrop-blur-sm" onClick={onClose}>
@@ -45,13 +79,25 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
                         <h2 className="text-lg font-semibold text-slate-800">Sessions</h2>
                         <p className="text-sm text-slate-500">Start fresh or reopen a previous conversation tree.</p>
                     </div>
-                    <button
-                        onClick={onClose}
-                        className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-                        title="Close"
-                    >
-                        <X className="h-4 w-4" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                        {currentSession && (
+                            <button
+                                onClick={() => exportSessionToFile(currentSession)}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700"
+                                title="Export current session to JSON file"
+                            >
+                                <Download className="h-3.5 w-3.5" />
+                                Export current
+                            </button>
+                        )}
+                        <button
+                            onClick={onClose}
+                            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                            title="Close"
+                        >
+                            <X className="h-4 w-4" />
+                        </button>
+                    </div>
                 </div>
 
                 <div className="grid gap-4 p-6 md:grid-cols-3">
@@ -107,7 +153,37 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
                             Paste a linear transcript from another chat app and turn it into a MemoTree session.
                         </p>
                     </button>
+                    <button
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isImportingFile}
+                        className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-left transition-colors hover:border-sky-300 hover:bg-sky-50 disabled:opacity-50"
+                    >
+                        <div className="mb-3 flex items-center gap-3">
+                            <div className="rounded-xl bg-sky-600 p-2 text-white">
+                                <Upload className="h-4 w-4" />
+                            </div>
+                            <div className="text-sm font-semibold text-slate-800">
+                                {isImportingFile ? 'Importing…' : 'Import Session File'}
+                            </div>
+                        </div>
+                        <p className="text-sm leading-relaxed text-slate-500">
+                            Restore a previously exported MemoTree session JSON, including all attachments.
+                        </p>
+                    </button>
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".json,application/json"
+                        className="hidden"
+                        onChange={(e) => void handleImportFile(e)}
+                    />
                 </div>
+
+                {importError && (
+                    <div className="mx-6 mb-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                        {importError}
+                    </div>
+                )}
 
                 <div className="border-t border-slate-100 px-6 py-4">
                     <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
@@ -122,24 +198,38 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
                     ) : (
                         <div className="max-h-[360px] space-y-2 overflow-y-auto">
                             {recentSessions.map((session) => (
-                                <button
+                                <div
                                     key={session.id}
-                                    onClick={() => {
-                                        void loadSessionById(session.id).then(onClose);
-                                    }}
-                                    className="flex w-full items-start justify-between rounded-xl border border-slate-200 px-4 py-3 text-left transition-colors hover:border-blue-300 hover:bg-slate-50"
+                                    className="group flex w-full items-center gap-2 rounded-xl border border-slate-200 px-4 py-3 transition-colors hover:border-blue-200 hover:bg-slate-50"
                                 >
-                                    <div className="min-w-0">
+                                    <button
+                                        onClick={() => void loadSessionById(session.id).then(onClose)}
+                                        className="min-w-0 flex-1 text-left"
+                                    >
                                         <div className="truncate text-sm font-medium text-slate-800">{session.title}</div>
                                         <div className="mt-1 flex items-center gap-2 text-xs text-slate-400">
                                             <Clock3 className="h-3.5 w-3.5" />
                                             <span>{new Date(session.updatedAt).toLocaleString()}</span>
+                                            <span className="font-mono">{session.id.slice(0, 8)}</span>
                                         </div>
+                                    </button>
+                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                                        <button
+                                            onClick={() => exportSessionToFile(session)}
+                                            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-200 hover:text-slate-600 transition-colors"
+                                            title="Export session to file"
+                                        >
+                                            <Download className="h-3.5 w-3.5" />
+                                        </button>
+                                        <button
+                                            onClick={() => void handleDeleteSession(session.id)}
+                                            className="rounded-lg p-1.5 text-slate-400 hover:bg-red-100 hover:text-red-600 transition-colors"
+                                            title="Delete session"
+                                        >
+                                            <X className="h-3.5 w-3.5" />
+                                        </button>
                                     </div>
-                                    <div className="ml-4 text-[11px] font-mono text-slate-300">
-                                        {session.id.slice(0, 8)}
-                                    </div>
-                                </button>
+                                </div>
                             ))}
                         </div>
                     )}
