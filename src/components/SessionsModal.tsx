@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Clock3, Download, FolderOpen, History, Import, Plus, Upload, X } from 'lucide-react';
-import { deleteSession, exportSessionToFile, importSessionFromJson, listSessions, loadLastSession, type PersistedSession } from '../lib/sessionPersistence';
+import { deleteSession, exportSessionToFile, importSessionFromJson, listSessions, loadLastSession, renameSessionTitle, type PersistedSession } from '../lib/sessionPersistence';
 import { useGraphStore } from '../store/useGraphStore';
 import { ImportChatModal } from './ImportChatModal';
 
@@ -15,8 +15,10 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
     const [isImportOpen, setIsImportOpen] = useState(false);
     const [importError, setImportError] = useState<string | null>(null);
     const [isImportingFile, setIsImportingFile] = useState(false);
+    const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+    const [editingTitle, setEditingTitle] = useState('');
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const { createNewSession, loadSessionById, loadSessionFromData, sessionId } = useGraphStore();
+    const { createNewSession, loadSessionById, loadSessionFromData, sessionId, setSessionTitle } = useGraphStore();
 
     useEffect(() => {
         if (!isOpen) {
@@ -59,6 +61,45 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
         refreshSessions();
     };
 
+    const startEditingSessionTitle = (session: PersistedSession) => {
+        setImportError(null);
+        setEditingSessionId(session.id);
+        setEditingTitle(session.title);
+    };
+
+    const stopEditingSessionTitle = () => {
+        setEditingSessionId(null);
+        setEditingTitle('');
+    };
+
+    const commitSessionTitle = async () => {
+        if (!editingSessionId) return;
+        const nextTitle = editingTitle.trim();
+        if (!nextTitle) {
+            stopEditingSessionTitle();
+            return;
+        }
+
+        try {
+            if (editingSessionId === sessionId) {
+                setSessionTitle(nextTitle);
+                setSessions((previous) => previous.map((session) =>
+                    session.id === editingSessionId ? { ...session, title: nextTitle } : session,
+                ));
+            } else {
+                await renameSessionTitle(editingSessionId, nextTitle);
+                setSessions((previous) => previous.map((session) =>
+                    session.id === editingSessionId ? { ...session, title: nextTitle } : session,
+                ));
+            }
+            refreshSessions();
+        } catch (err) {
+            setImportError(err instanceof Error ? err.message : 'Rename failed.');
+        } finally {
+            stopEditingSessionTitle();
+        }
+    };
+
     if (!isOpen) {
         return null;
     }
@@ -77,7 +118,34 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
                 <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
                     <div>
                         <h2 className="text-lg font-semibold text-slate-800">Sessions</h2>
-                        <p className="text-sm text-slate-500">Start fresh or reopen a previous conversation tree.</p>
+                        <p className="text-sm text-slate-500">Start fresh or reopen a previous conversation tree. Double-click a title to rename it.</p>
+                        {currentSession && (
+                            editingSessionId === currentSession.id ? (
+                                <input
+                                    autoFocus
+                                    value={editingTitle}
+                                    onChange={(event) => setEditingTitle(event.target.value)}
+                                    onBlur={() => void commitSessionTitle()}
+                                    onKeyDown={(event) => {
+                                        if (event.key === 'Enter') {
+                                            event.preventDefault();
+                                            void commitSessionTitle();
+                                        } else if (event.key === 'Escape') {
+                                            stopEditingSessionTitle();
+                                        }
+                                    }}
+                                    className="mt-2 rounded-md border border-blue-200 bg-white px-2 py-1 text-sm font-medium text-slate-700 outline-none focus:border-blue-400"
+                                />
+                            ) : (
+                                <button
+                                    onDoubleClick={() => startEditingSessionTitle(currentSession)}
+                                    className="mt-2 rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600"
+                                    title="Double-click to rename current session"
+                                >
+                                    {currentSession.title}
+                                </button>
+                            )
+                        )}
                     </div>
                     <div className="flex items-center gap-2">
                         {currentSession && (
@@ -206,7 +274,31 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
                                         onClick={() => void loadSessionById(session.id).then(onClose)}
                                         className="min-w-0 flex-1 text-left"
                                     >
-                                        <div className="truncate text-sm font-medium text-slate-800">{session.title}</div>
+                                        {editingSessionId === session.id ? (
+                                            <input
+                                                autoFocus
+                                                value={editingTitle}
+                                                onChange={(event) => setEditingTitle(event.target.value)}
+                                                onBlur={() => void commitSessionTitle()}
+                                                onKeyDown={(event) => {
+                                                    if (event.key === 'Enter') {
+                                                        event.preventDefault();
+                                                        void commitSessionTitle();
+                                                    } else if (event.key === 'Escape') {
+                                                        stopEditingSessionTitle();
+                                                    }
+                                                }}
+                                                className="w-full rounded-md border border-blue-200 bg-white px-2 py-1 text-sm font-medium text-slate-800 outline-none focus:border-blue-400"
+                                            />
+                                        ) : (
+                                            <div
+                                                onDoubleClick={() => startEditingSessionTitle(session)}
+                                                className="truncate text-sm font-medium text-slate-800"
+                                                title="Double-click to rename"
+                                            >
+                                                {session.title}
+                                            </div>
+                                        )}
                                         <div className="mt-1 flex items-center gap-2 text-xs text-slate-400">
                                             <Clock3 className="h-3.5 w-3.5" />
                                             <span>{new Date(session.updatedAt).toLocaleString()}</span>

@@ -71,6 +71,10 @@ export function validatePersistedSession(data: unknown): PersistedSession {
         throw new Error('Session activeNodeId must be a string or null.');
     }
 
+    if ('sessionTitle' in graph && graph.sessionTitle !== undefined && typeof graph.sessionTitle !== 'string') {
+        throw new Error('Session title must be a string when provided.');
+    }
+
     if ('providerId' in graph && graph.providerId !== 'gemini') {
         throw new Error(`Unsupported provider in session file: ${String(graph.providerId)}`);
     }
@@ -96,6 +100,26 @@ export async function saveSession(session: PersistedSession) {
     const db = await getDb();
     await db.put(SESSIONS_STORE, session);
     await db.put(META_STORE, session.id, LAST_SESSION_KEY);
+}
+
+export async function renameSessionTitle(sessionId: string, title: string) {
+    const db = await getDb();
+    const session = (await db.get(SESSIONS_STORE, sessionId)) as PersistedSession | undefined;
+    if (!session) {
+        throw new Error('Session not found.');
+    }
+
+    const nextTitle = title.trim();
+    const resolvedTitle = nextTitle || session.title;
+    await db.put(SESSIONS_STORE, {
+        ...session,
+        title: resolvedTitle,
+        updatedAt: new Date().toISOString(),
+        graph: {
+            ...session.graph,
+            sessionTitle: resolvedTitle,
+        },
+    });
 }
 
 export async function markLastSession(sessionId: string) {

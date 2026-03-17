@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { ContextGroup, MessageNode } from '../store/types';
 import type { ImportedPathGroup } from '../lib/import/pathGroups';
@@ -11,11 +12,12 @@ interface CustomNodeProps {
         isSelected: boolean;
         groups: ContextGroup[];
         onInspectPathGroup?: (pathGroup: ImportedPathGroup) => void;
+        onRenameNode?: (nodeId: string, summary: string) => void;
     };
 }
 
 export function CustomNode({ data }: CustomNodeProps) {
-    const { node, pathGroup, isActive, isSelected, groups, onInspectPathGroup } = data;
+    const { node, pathGroup, isActive, isSelected, groups, onInspectPathGroup, onRenameNode } = data;
     const isPathGroup = Boolean(pathGroup);
     const badges = node ? getNodeBadges(node) : [];
     const summary = pathGroup
@@ -24,6 +26,22 @@ export function CustomNode({ data }: CustomNodeProps) {
             ? node.summary || getNodeSummary(node)
             : '';
     const primaryGroup = groups[0];
+    const [isEditing, setIsEditing] = useState(false);
+    const [draftSummary, setDraftSummary] = useState(summary);
+
+    useEffect(() => {
+        setDraftSummary(summary);
+    }, [summary]);
+
+    const commitRename = () => {
+        if (!node || !onRenameNode) {
+            setIsEditing(false);
+            return;
+        }
+        const nextSummary = draftSummary.trim();
+        onRenameNode(node.id, nextSummary || getNodeSummary(node));
+        setIsEditing(false);
+    };
 
     return (
         <div className={`relative p-4 rounded-xl shadow-lg w-[250px] border-2 transition-all cursor-pointer bg-white ${
@@ -81,9 +99,36 @@ export function CustomNode({ data }: CustomNodeProps) {
                     </button>
                 </>
             ) : (
-                <p className="text-sm text-slate-700 line-clamp-3">
-                    {summary}
-                </p>
+                isEditing ? (
+                    <input
+                        autoFocus
+                        value={draftSummary}
+                        onChange={(event) => setDraftSummary(event.target.value)}
+                        onBlur={commitRename}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                                event.preventDefault();
+                                commitRename();
+                            } else if (event.key === 'Escape') {
+                                setDraftSummary(summary);
+                                setIsEditing(false);
+                            }
+                        }}
+                        onClick={(event) => event.stopPropagation()}
+                        className="w-full rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-sm text-slate-700 outline-none focus:border-blue-400"
+                    />
+                ) : (
+                    <button
+                        onDoubleClick={(event) => {
+                            event.stopPropagation();
+                            setIsEditing(true);
+                        }}
+                        className="w-full text-left text-sm text-slate-700 line-clamp-3"
+                        title="Double-click to rename node"
+                    >
+                        {summary}
+                    </button>
+                )
             )}
 
             {groups.length > 0 && (

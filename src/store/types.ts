@@ -191,6 +191,7 @@ export interface ConversationGraph {
     compactions: Record<string, CompactionBlock>;
     rootId: string | null;
     activeNodeId: string | null;
+    sessionTitle?: string;
     providerId: ProviderId;
     apiKey: string | null;
     importEnvelope?: ImportedConversationEnvelope;

@@ -41,6 +41,7 @@ export function GraphView() {
         apiKey,
         selectedNodeIds,
         setActiveNode,
+        updateNodeSummary,
         toggleNodeSelection,
         setSelectedNodeIds,
         clearNodeSelection,
@@ -137,6 +138,7 @@ export function GraphView() {
                     isActive: node.id === activeNodeId,
                     isSelected: selectedNodeIds.includes(node.id),
                     groups: (node.groupIds ?? []).map((groupId) => storeGroups[groupId]).filter(Boolean),
+                    onRenameNode: updateNodeSummary,
                 },
             });
 
@@ -186,7 +188,7 @@ export function GraphView() {
         const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(rawNodes, rawEdges, 'TB', uiPositions);
         setNodes(layoutedNodes);
         setEdges(layoutedEdges);
-    }, [renderedNodes, storeGroups, activeNodeId, selectedNodeIds, setNodes, setEdges, renderedImportEnvelope, uiPositions, getPathGroupSavedPosition, clearNodeSelection, setActiveNode]);
+    }, [renderedNodes, storeGroups, activeNodeId, selectedNodeIds, setNodes, setEdges, renderedImportEnvelope, uiPositions, getPathGroupSavedPosition, clearNodeSelection, setActiveNode, updateNodeSummary]);
 
     useEffect(() => {
         if (activeNodeId && rfNodes.length > 0) {

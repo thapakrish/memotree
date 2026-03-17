@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
-import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, FileText, Music, ScanText } from 'lucide-react';
+import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, FileText, Music, ScanText, ArrowRight, Sparkles } from 'lucide-react';
 import { useGraphStore } from '../store/useGraphStore';
 import type { AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, MessageNode } from '../store/types';
 import { getAssistantText, interceptMemoryTool } from '../lib/geminiEngine';
@@ -342,6 +342,7 @@ export function ChatView() {
         [apiKey, providerId],
     );
     const scrollRef = useRef<HTMLDivElement>(null);
+    const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
@@ -411,6 +412,17 @@ export function ChatView() {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
     }, [streamingEvents, isTyping, path.length]);
+
+    useEffect(() => {
+        if (!activeNodeId || path.length === 0) {
+            return;
+        }
+
+        const target = messageRefs.current[activeNodeId];
+        if (target) {
+            target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+    }, [activeNodeId, path]);
 
     // Auto-resize textarea
     useEffect(() => {
@@ -747,14 +759,58 @@ export function ChatView() {
                     </div>
                 )}
                 {path.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-4">
-                        <Cpu className="w-12 h-12 opacity-20" />
-                        <p>Send a message to start the trunk of the tree.</p>
+                    <div className="flex min-h-full items-center justify-center py-10">
+                        <div className="max-w-xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+                            <div className="flex items-center gap-3">
+                                <div className="rounded-2xl bg-blue-50 p-3 text-blue-600">
+                                    <Sparkles className="h-6 w-6" />
+                                </div>
+                                <div>
+                                    <h2 className="text-lg font-semibold text-slate-800">Welcome to MemoTree</h2>
+                                    <p className="text-sm text-slate-500">Conversations branch into a navigable tree instead of disappearing into one linear thread.</p>
+                                </div>
+                            </div>
+
+                            <div className="mt-6 grid gap-3 text-sm text-slate-600 md:grid-cols-3">
+                                <div className="rounded-2xl bg-slate-50 p-4">
+                                    <div className="font-semibold text-slate-800">1. Start a trunk</div>
+                                    <p className="mt-1 leading-relaxed">Send your first message or import an existing chat to create the initial path.</p>
+                                </div>
+                                <div className="rounded-2xl bg-slate-50 p-4">
+                                    <div className="font-semibold text-slate-800">2. Fork anywhere</div>
+                                    <p className="mt-1 leading-relaxed">Jump back to any node and branch from there when you want to explore alternatives.</p>
+                                </div>
+                                <div className="rounded-2xl bg-slate-50 p-4">
+                                    <div className="font-semibold text-slate-800">3. Inspect context</div>
+                                    <p className="mt-1 leading-relaxed">Open <span className="font-medium text-slate-700">Context</span> to see what the next model call will include.</p>
+                                </div>
+                            </div>
+
+                            <div className="mt-6 flex flex-wrap items-center gap-3">
+                                <button
+                                    onClick={() => textareaRef.current?.focus()}
+                                    className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
+                                >
+                                    <ArrowRight className="h-4 w-4" />
+                                    Start typing
+                                </button>
+                                <button
+                                    onClick={() => setIsSessionsOpen(true)}
+                                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                                >
+                                    <FolderOpen className="h-4 w-4" />
+                                    Open Sessions
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 ) : (
                     path.map((msg: MessageNode) => (
                         <div
                             key={msg.id}
+                            ref={(element) => {
+                                messageRefs.current[msg.id] = element;
+                            }}
                             className={`group flex flex-col max-w-[85%] ${msg.role === 'user' ? 'ml-auto items-end' : 'mr-auto items-start'}`}
                         >
                             <div className="flex items-center gap-2 mb-1 px-1">

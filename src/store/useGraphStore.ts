@@ -55,6 +55,7 @@ interface GraphState extends ConversationGraph {
     addMemoryPatch: (nodeId: string, patch: MemoryPatch) => void;
     getPath: (nodeId: string | null) => MessageNode[];
     setApiKey: (key: string) => void;
+    setSessionTitle: (title: string) => void;
     setProviderId: (providerId: ProviderId) => void;
     goToParent: () => void;
     goToLatestChild: () => void;
@@ -72,6 +73,7 @@ function createEmptySessionState() {
         compactions: {},
         rootId: null,
         activeNodeId: null,
+        sessionTitle: undefined,
         providerId: 'gemini' as ProviderId,
         importEnvelope: undefined,
         previewNodes: null,
@@ -152,6 +154,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 groups: savedSession.graph.groups ?? {},
                 uiPositions: savedSession.graph.uiPositions ?? {},
                 compactions: savedSession.graph.compactions ?? {},
+                sessionTitle: savedSession.graph.sessionTitle ?? savedSession.title,
                 providerId: savedSession.graph.providerId ?? 'gemini',
                 sessionId: savedSession.id,
                 createdAt: savedSession.createdAt,
@@ -180,6 +183,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         set({
             ...emptyState,
             apiKey: get().apiKey,
+            sessionTitle: undefined,
             providerId: get().providerId,
             isHydrated: true,
             selectedNodeIds: [],
@@ -199,6 +203,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             groups: savedSession.graph.groups ?? {},
             uiPositions: savedSession.graph.uiPositions ?? {},
             compactions: savedSession.graph.compactions ?? {},
+            sessionTitle: savedSession.graph.sessionTitle ?? savedSession.title,
             providerId: savedSession.graph.providerId ?? 'gemini',
             sessionId: savedSession.id,
             createdAt: savedSession.createdAt,
@@ -219,6 +224,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             groups: validatedSession.graph.groups ?? {},
             uiPositions: validatedSession.graph.uiPositions ?? {},
             compactions: validatedSession.graph.compactions ?? {},
+            sessionTitle: validatedSession.graph.sessionTitle ?? validatedSession.title,
             providerId: validatedSession.graph.providerId ?? 'gemini',
             sessionId: validatedSession.id,
             createdAt: validatedSession.createdAt,
@@ -527,6 +533,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
     setActiveNode: (id) => set({ activeNodeId: id }),
     setApiKey: (key) => set({ apiKey: key }),
+    setSessionTitle: (sessionTitle) => set({ sessionTitle }),
     setProviderId: (providerId) => set({ providerId }),
 
     updateNodeSummary: (id, summary) => set((state) => {
@@ -646,6 +653,7 @@ useGraphStore.subscribe((state) => {
         groups: state.groups,
         uiPositions: state.uiPositions,
         compactions: state.compactions,
+        sessionTitle: state.sessionTitle,
         providerId: state.providerId,
         rootId: state.rootId,
         activeNodeId: state.activeNodeId,
@@ -662,11 +670,12 @@ useGraphStore.subscribe((state) => {
         id: state.sessionId,
         createdAt: state.createdAt,
         updatedAt: new Date().toISOString(),
-        title: deriveSessionTitle({
+        title: state.sessionTitle?.trim() || deriveSessionTitle({
             nodes: state.nodes,
             groups: state.groups,
             uiPositions: state.uiPositions,
             compactions: state.compactions,
+            sessionTitle: state.sessionTitle,
             providerId: state.providerId,
             rootId: state.rootId,
             activeNodeId: state.activeNodeId,
@@ -677,6 +686,7 @@ useGraphStore.subscribe((state) => {
             groups: state.groups,
             uiPositions: state.uiPositions,
             compactions: state.compactions,
+            sessionTitle: state.sessionTitle,
             providerId: state.providerId,
             rootId: state.rootId,
             activeNodeId: state.activeNodeId,
