@@ -19,6 +19,22 @@ function isObject(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
 }
 
+function isValidNodeRecord(value: unknown): boolean {
+    if (!isObject(value)) {
+        return false;
+    }
+
+    return Object.values(value).every((node) =>
+        isObject(node) &&
+        typeof node.id === 'string' &&
+        typeof node.role === 'string' &&
+        typeof node.content === 'string' &&
+        Array.isArray(node.memoryPatches) &&
+        typeof node.timestamp === 'string' &&
+        (node.parentId === null || typeof node.parentId === 'string'),
+    );
+}
+
 export function validatePersistedSession(data: unknown): PersistedSession {
     if (!isObject(data)) {
         throw new Error('Invalid MemoTree session file.');
@@ -39,8 +55,20 @@ export function validatePersistedSession(data: unknown): PersistedSession {
         throw new Error('Session graph is missing required object stores.');
     }
 
+    if (!isValidNodeRecord(graph.nodes)) {
+        throw new Error('Session graph contains invalid nodes.');
+    }
+
     if ('compactions' in graph && !isObject(graph.compactions)) {
         throw new Error('Session compactions must be an object map.');
+    }
+
+    if ('rootId' in graph && graph.rootId !== null && typeof graph.rootId !== 'string') {
+        throw new Error('Session rootId must be a string or null.');
+    }
+
+    if ('activeNodeId' in graph && graph.activeNodeId !== null && typeof graph.activeNodeId !== 'string') {
+        throw new Error('Session activeNodeId must be a string or null.');
     }
 
     if ('providerId' in graph && graph.providerId !== 'gemini') {
@@ -99,6 +127,19 @@ export async function listSessions() {
 export async function deleteSession(sessionId: string) {
     const db = await getDb();
     await db.delete(SESSIONS_STORE, sessionId);
+
+    const lastSessionId = await db.get<string>(META_STORE, LAST_SESSION_KEY);
+    if (lastSessionId !== sessionId) {
+        return;
+    }
+
+    const remainingSessions = (await db.getAll(SESSIONS_STORE)) as PersistedSession[];
+    const nextLastSession = remainingSessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    if (nextLastSession) {
+        await db.put(META_STORE, nextLastSession.id, LAST_SESSION_KEY);
+    } else {
+        await db.delete(META_STORE, LAST_SESSION_KEY);
+    }
 }
 
 export function exportSessionToFile(session: PersistedSession): void {

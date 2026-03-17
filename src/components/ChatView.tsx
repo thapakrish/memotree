@@ -956,7 +956,7 @@ export function ChatView() {
                                     isDraggingOver ? 'Drop image here...' :
                                     !activeNodeId ? 'Start a new conversation...' :
                                     path[path.length - 1]?.role === 'user' ? 'Try an alternative prompt...' :
-                                    provider?.capabilities.supportsFileAttachments ? 'Reply or attach a file...' : 'Reply to this message...'
+                                    provider?.capabilities.supportsFileAttachments ? 'Reply, paste an image, or attach a file...' : 'Reply to this message...'
                                 }
                                 className="flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 pl-4 py-3.5 pr-4 text-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all shadow-inner disabled:opacity-50 overflow-y-auto"
                                 rows={1}
