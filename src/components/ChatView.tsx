@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
-import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, FileText, Music, ScanText, ArrowRight, Sparkles } from 'lucide-react';
+import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, FileText, Music, ScanText, ArrowRight, Sparkles, RotateCcw, Pencil } from 'lucide-react';
 import { useGraphStore } from '../store/useGraphStore';
 import type { AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, MessageNode } from '../store/types';
 import { getAssistantText, interceptMemoryTool } from '../lib/geminiEngine';
@@ -14,6 +14,49 @@ import { ContextInspector } from './ContextInspector';
 
 function getTextSummary(text: string): string {
     return text.length > 40 ? `${text.slice(0, 40)}...` : text;
+}
+
+function roughTokens(text: string): number {
+    return Math.ceil(text.length / 4);
+}
+
+function formatBytes(bytes?: number): string {
+    if (!bytes) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function describeAttachment(attachment: AttachmentPart): string {
+    const label = attachment.name || attachment.kind.toUpperCase();
+    const size = formatBytes(attachment.sizeBytes);
+    return size ? `${label} (${attachment.mimeType}, ${size})` : `${label} (${attachment.mimeType})`;
+}
+
+function buildBranchMarkdown(path: MessageNode[]): string {
+    return path.map((node) => {
+        const title = node.role === 'user'
+            ? 'User'
+            : node.role === 'assistant'
+                ? 'Assistant'
+                : 'System';
+        const body = node.role === 'assistant'
+            ? (getFinalAnswerText(node.events ?? []) || node.content).trim()
+            : node.content.trim();
+        const attachmentLines = (node.attachments ?? []).map((attachment) => `- ${describeAttachment(attachment)}`);
+        const sections = [`## ${title}`];
+
+        if (attachmentLines.length > 0) {
+            sections.push('Attachments:');
+            sections.push(...attachmentLines);
+        }
+
+        if (body) {
+            sections.push(body);
+        }
+
+        return sections.join('\n');
+    }).join('\n\n');
 }
 
 function normalizeToolArgs(args: unknown): Record<string, string> {
@@ -173,6 +216,13 @@ async function processClipboardItems(
         }
     }
     return results;
+}
+
+function cloneAttachments(parts: AttachmentPart[]): AttachmentPart[] {
+    return parts.map((part) => ({
+        ...part,
+        id: crypto.randomUUID(),
+    }));
 }
 
 const MAX_TOOL_ROUNDS = 2;
@@ -337,6 +387,9 @@ export function ChatView() {
     const [isDraggingOver, setIsDraggingOver] = useState(false);
     const [isInspectorOpen, setIsInspectorOpen] = useState(false);
     const [isCompacting, setIsCompacting] = useState(false);
+    const [branchCopied, setBranchCopied] = useState(false);
+    const [branchCopyFailed, setBranchCopyFailed] = useState(false);
+    const [statusMessage, setStatusMessage] = useState<{ tone: 'error' | 'info'; text: string } | null>(null);
     const provider = useMemo<IProvider | null>(
         () => apiKey ? createProvider(providerId, apiKey) : null,
         [apiKey, providerId],
@@ -349,6 +402,10 @@ export function ChatView() {
 
     const addAttachments = (parts: AttachmentPart[]) => {
         setAttachments((prev) => [...prev, ...parts]);
+    };
+
+    const showStatus = (tone: 'error' | 'info', text: string) => {
+        setStatusMessage({ tone, text });
     };
 
     const removeAttachment = (id: string) => {
@@ -366,6 +423,8 @@ export function ChatView() {
         const parts = await processClipboardItems(e.clipboardData.items);
         if (parts.length > 0) {
             addAttachments(parts);
+        } else {
+            showStatus('error', 'Unable to attach the pasted image.');
         }
     };
 
@@ -391,21 +450,52 @@ export function ChatView() {
         setIsDraggingOver(false);
         const files = Array.from(e.dataTransfer.files).filter((f) => isAttachableFile(f.type));
         const parts = await Promise.all(files.map((f) => processAnyFile(f, 'drop')));
-        addAttachments(parts.filter(Boolean) as AttachmentPart[]);
+        const validParts = parts.filter(Boolean) as AttachmentPart[];
+        if (validParts.length > 0) {
+            addAttachments(validParts);
+        }
+        if (files.length > validParts.length) {
+            showStatus('error', 'Some dropped files could not be attached. Check file type and size limits.');
+        }
     };
 
     const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!provider?.capabilities.supportsFileAttachments) return;
         const files = Array.from(e.target.files ?? []);
         const parts = await Promise.all(files.map((f) => processAnyFile(f, 'file')));
-        addAttachments(parts.filter(Boolean) as AttachmentPart[]);
+        const validParts = parts.filter(Boolean) as AttachmentPart[];
+        if (validParts.length > 0) {
+            addAttachments(validParts);
+        }
+        if (files.length > validParts.length) {
+            showStatus('error', 'Some selected files could not be attached. Check file type and size limits.');
+        }
         e.target.value = '';
     };
 
     const path = getPath(activeNodeId);
+    const draftMemoryState = useMemo(() => reconstructMemory(path), [path]);
     const visibleImportEnvelope = previewImportEnvelope ?? importEnvelope;
     const acceptedSuggestionCount = visibleImportEnvelope?.suggestions?.filter((suggestion) => suggestion.status === 'accepted').length ?? 0;
     const pendingSuggestionCount = visibleImportEnvelope?.suggestions?.filter((suggestion) => suggestion.status !== 'accepted' && suggestion.status !== 'rejected').length ?? 0;
+    const composerEstimate = useMemo(() => {
+        if (!provider || (!input.trim() && attachments.length === 0)) {
+            return null;
+        }
+
+        const providerEstimate = provider.estimateContext(draftMemoryState, attachments);
+        const conversationTokens = path.reduce((sum, node) => {
+            const eventTextLength = (node.events ?? []).reduce((eventSum, event) =>
+                eventSum + ('text' in event ? event.text.length : 0), 0);
+            return sum + roughTokens(node.content) + Math.ceil(eventTextLength / 4);
+        }, 0);
+        const draftTokens = input.trim() ? roughTokens(input.trim()) : 0;
+
+        return providerEstimate.cacheableTokens
+            + providerEstimate.attachmentTokens
+            + conversationTokens
+            + draftTokens;
+    }, [attachments, draftMemoryState, input, path, provider]);
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -423,6 +513,15 @@ export function ChatView() {
             target.scrollIntoView({ block: 'center', behavior: 'smooth' });
         }
     }, [activeNodeId, path]);
+
+    useEffect(() => {
+        if (!statusMessage) {
+            return;
+        }
+
+        const timeout = window.setTimeout(() => setStatusMessage(null), 4000);
+        return () => window.clearTimeout(timeout);
+    }, [statusMessage]);
 
     // Auto-resize textarea
     useEffect(() => {
@@ -466,32 +565,16 @@ export function ChatView() {
             }
         } catch (err) {
             console.error('Compaction failed:', err);
-            alert('Compaction failed. Check console.');
+            showStatus('error', 'Compaction failed. The conversation context was not changed.');
         } finally {
             setIsCompacting(false);
         }
     };
 
-    const handleSend = async () => {
-        if ((!input.trim() && attachments.length === 0) || !provider) return;
-
+    const generateAssistantReply = async (userNodeId: string) => {
+        if (!provider) return;
         const controller = new AbortController();
         abortControllerRef.current = controller;
-
-        const activeNode = path.length > 0 ? path[path.length - 1] : null;
-        const parentId = activeNode?.role === 'user' ? activeNode.parentId : activeNodeId;
-
-        const userNodeId = addNode({
-            parentId,
-            role: 'user',
-            content: input,
-            attachments: attachments.length > 0 ? attachments : undefined,
-            memoryPatches: [],
-            summary: getTextSummary(input),
-        });
-
-        setInput('');
-        setAttachments([]);
         setIsTyping(true);
         setStreamingEvents([]);
         setThoughtsTokenCount(0);
@@ -617,13 +700,78 @@ export function ChatView() {
             }
         } catch (err) {
             console.error(err);
-            alert('API request failed. Check API Key or console.');
+            showStatus('error', err instanceof Error ? err.message : 'Request failed. Check your API key or console.');
         } finally {
             setIsTyping(false);
             setStreamingEvents([]);
             setThoughtsTokenCount(0);
             abortControllerRef.current = null;
         }
+    };
+
+    const handleSend = async () => {
+        if ((!input.trim() && attachments.length === 0) || !provider) return;
+
+        const activeNode = path.length > 0 ? path[path.length - 1] : null;
+        const parentId = activeNode?.role === 'user' ? activeNode.parentId : activeNodeId;
+        const nextInput = input;
+        const nextAttachments = attachments;
+
+        const userNodeId = addNode({
+            parentId,
+            role: 'user',
+            content: nextInput,
+            attachments: nextAttachments.length > 0 ? nextAttachments : undefined,
+            memoryPatches: [],
+            summary: getTextSummary(nextInput),
+        });
+
+        setInput('');
+        setAttachments([]);
+        await generateAssistantReply(userNodeId);
+    };
+
+    const handleRegenerate = async (assistantNode: MessageNode) => {
+        if (isTyping || !assistantNode.parentId) return;
+        setActiveNode(assistantNode.parentId);
+        await generateAssistantReply(assistantNode.parentId);
+    };
+
+    const handleEditAndResend = (userNode: MessageNode) => {
+        setActiveNode(userNode.parentId);
+        setInput(userNode.content);
+        setAttachments(cloneAttachments(userNode.attachments ?? []));
+        requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+
+    const handleCopyBranch = async () => {
+        if (path.length === 0) return;
+
+        try {
+            await navigator.clipboard.writeText(buildBranchMarkdown(path));
+            setBranchCopyFailed(false);
+            setBranchCopied(true);
+            setTimeout(() => setBranchCopied(false), 2000);
+        } catch {
+            setBranchCopied(false);
+            setBranchCopyFailed(true);
+            setTimeout(() => setBranchCopyFailed(false), 2000);
+        }
+    };
+
+    const handleRewindTurn = () => {
+        if (path.length === 0 || isTyping) return;
+
+        const lastNode = path[path.length - 1];
+        const previousNode = path[path.length - 2] ?? null;
+
+        if (lastNode.role === 'assistant' && previousNode?.id === lastNode.parentId) {
+            setActiveNode(previousNode.parentId);
+        } else {
+            setActiveNode(lastNode.parentId);
+        }
+
+        requestAnimationFrame(() => textareaRef.current?.focus());
     };
 
     const streamingDisplayEvents = streamingEvents.length > 0
@@ -642,6 +790,24 @@ export function ChatView() {
                     <p className="text-xs font-medium text-slate-400">Time-Traveling LLM Interface</p>
                 </div>
                 <div className="flex items-center gap-2">
+                    <button
+                        onClick={handleRewindTurn}
+                        disabled={path.length === 0 || isTyping}
+                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Jump back one turn without deleting history"
+                    >
+                        <Undo2 className="h-3.5 w-3.5" />
+                        <span>Rewind</span>
+                    </button>
+                    <button
+                        onClick={() => void handleCopyBranch()}
+                        disabled={path.length === 0}
+                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Copy the active branch as markdown"
+                    >
+                        {branchCopied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                        <span>{branchCopied ? 'Copied' : branchCopyFailed ? 'Failed' : 'Copy Branch'}</span>
+                    </button>
                     <button
                         onClick={() => setIsInspectorOpen((v) => !v)}
                         className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${
@@ -871,7 +1037,40 @@ export function ChatView() {
                                 </button>
                             </div>
 
-                            <div className={`mt-1.5 flex items-center gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`mt-1.5 flex flex-wrap items-center gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                <button
+                                    onClick={() => setActiveNode(msg.id)}
+                                    className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium shadow-sm transition-colors ${
+                                        activeNodeId === msg.id
+                                            ? 'border-blue-200 bg-blue-50 text-blue-700'
+                                            : 'border-slate-200 bg-white text-slate-500 hover:border-blue-300 hover:text-blue-700'
+                                    }`}
+                                    title="Branch conversation from this node"
+                                >
+                                    <CornerDownRight className="h-3 w-3" />
+                                    <span>{activeNodeId === msg.id ? 'Branching here' : 'Branch here'}</span>
+                                </button>
+                                {msg.role === 'user' && (
+                                    <button
+                                        onClick={() => handleEditAndResend(msg)}
+                                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-500 shadow-sm transition-colors hover:border-blue-300 hover:text-blue-700"
+                                        title="Edit this prompt and resend from the parent node"
+                                    >
+                                        <Pencil className="h-3 w-3" />
+                                        <span>Edit & resend</span>
+                                    </button>
+                                )}
+                                {msg.role === 'assistant' && msg.parentId && (
+                                    <button
+                                        onClick={() => handleRegenerate(msg)}
+                                        disabled={isTyping}
+                                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-500 shadow-sm transition-colors hover:border-blue-300 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                        title="Generate another response from the same user turn"
+                                    >
+                                        <RotateCcw className="h-3 w-3" />
+                                        <span>Regenerate</span>
+                                    </button>
+                                )}
                                 <CopyMessageButton text={msg.role === 'assistant'
                                     ? (getFinalAnswerText(msg.events ?? []) || msg.content)
                                     : msg.content}
@@ -930,6 +1129,17 @@ export function ChatView() {
                     </div>
                 ) : (
                     <div className="flex flex-col gap-2">
+                        {statusMessage && (
+                            <div
+                                className={`rounded-xl border px-3 py-2 text-xs font-medium ${
+                                    statusMessage.tone === 'error'
+                                        ? 'border-red-200 bg-red-50 text-red-700'
+                                        : 'border-blue-200 bg-blue-50 text-blue-700'
+                                }`}
+                            >
+                                {statusMessage.text}
+                            </div>
+                        )}
                         {/* Attachment preview chips */}
                         {attachments.length > 0 && (
                             <div className="flex flex-wrap gap-2">
@@ -1027,13 +1237,21 @@ export function ChatView() {
                                     <Square className="w-4 h-4 fill-current" />
                                 </button>
                             ) : (
-                                <button
-                                    onClick={handleSend}
-                                    disabled={!input.trim() && attachments.length === 0}
-                                    className="shrink-0 p-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors shadow-sm"
-                                >
-                                    <Send className="w-4 h-4" />
-                                </button>
+                                <div className="flex flex-col items-end gap-1">
+                                    {composerEstimate !== null && (
+                                        <span className="text-[11px] font-medium text-slate-400">
+                                            ~{composerEstimate.toLocaleString()} tokens
+                                        </span>
+                                    )}
+                                    <button
+                                        onClick={handleSend}
+                                        disabled={!input.trim() && attachments.length === 0}
+                                        className="shrink-0 p-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors shadow-sm"
+                                        title={composerEstimate !== null ? `Estimated next request size: ~${composerEstimate.toLocaleString()} tokens` : 'Send message'}
+                                    >
+                                        <Send className="w-4 h-4" />
+                                    </button>
+                                </div>
                             )}
                         </div>
                     </div>
