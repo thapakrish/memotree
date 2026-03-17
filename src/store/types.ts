@@ -3,6 +3,19 @@ export interface MemoryPatch {
     diffText: string;
 }
 
+export type AttachmentMimeType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+
+export interface AttachmentPart {
+    id: string;
+    kind: 'image';
+    mimeType: AttachmentMimeType;
+    /** Base64-encoded image data (no data URL prefix). */
+    data: string;
+    name?: string;
+    sizeBytes?: number;
+    sourceType: 'clipboard' | 'file' | 'drop';
+}
+
 export type ImportSourcePlatform = 'chatgpt' | 'claude' | 'gemini' | 'other';
 export type ImportMode = 'linear' | 'assisted' | 'deep';
 export type InferenceMethod = 'rule' | 'llm' | 'user';
@@ -144,6 +157,7 @@ export interface MessageNode {
     kind?: 'message' | 'merge';
     role: 'user' | 'assistant' | 'system';
     content: string;
+    attachments?: AttachmentPart[];
     events?: ChatEvent[];
     mergeContext?: MergeContext;
     memoryPatches: MemoryPatch[];

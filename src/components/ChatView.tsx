@@ -1,8 +1,8 @@
 import { startTransition, useEffect, useRef, useState } from 'react';
-import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square } from 'lucide-react';
+import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon } from 'lucide-react';
 import type { Content, FunctionCall, GenerateContentResponse, Part } from '@google/genai';
 import { useGraphStore } from '../store/useGraphStore';
-import type { ChatEvent, MessageNode } from '../store/types';
+import type { AttachmentMimeType, AttachmentPart, ChatEvent, MessageNode } from '../store/types';
 import {
     createFunctionResponseContent,
     createModelToolCallContent,
@@ -39,9 +39,120 @@ function normalizeToolArgs(args: unknown): Record<string, string> {
     return normalized;
 }
 
+const SUPPORTED_IMAGE_TYPES: AttachmentMimeType[] = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+const MAX_IMAGE_DIM = 2048;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+function extractBase64Payload(dataUrl: string): string | null {
+    const [, payload] = dataUrl.split(',', 2);
+    return payload || null;
+}
+
+async function processImageFile(
+    file: File,
+    sourceType: AttachmentPart['sourceType'],
+): Promise<AttachmentPart | null> {
+    const mimeType = file.type as AttachmentMimeType;
+    if (!SUPPORTED_IMAGE_TYPES.includes(mimeType)) return null;
+
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        const fail = () => resolve(null);
+
+        reader.onerror = fail;
+        reader.onload = (e) => {
+            const dataUrl = e.target?.result as string;
+            if (!dataUrl) {
+                fail();
+                return;
+            }
+
+            const finalize = (base64: string, finalMime: AttachmentMimeType) => {
+                resolve({
+                    id: crypto.randomUUID(),
+                    kind: 'image',
+                    mimeType: finalMime,
+                    data: base64,
+                    name: file.name || undefined,
+                    sizeBytes: file.size,
+                    sourceType,
+                });
+            };
+
+            if (file.size <= MAX_IMAGE_BYTES) {
+                const base64 = extractBase64Payload(dataUrl);
+                if (!base64) {
+                    fail();
+                    return;
+                }
+                finalize(base64, mimeType);
+                return;
+            }
+
+            if (mimeType === 'image/gif') {
+                fail();
+                return;
+            }
+
+            // Resize large images via canvas
+            const img = new Image();
+            img.onerror = fail;
+            img.onload = () => {
+                const scale = Math.min(MAX_IMAGE_DIM / img.width, MAX_IMAGE_DIM / img.height, 1);
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.round(img.width * scale);
+                canvas.height = Math.round(img.height * scale);
+                const context = canvas.getContext('2d');
+                if (!context) {
+                    fail();
+                    return;
+                }
+                context.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+                const resizedDataUrl = mimeType === 'image/png'
+                    ? canvas.toDataURL('image/png')
+                    : mimeType === 'image/webp'
+                        ? canvas.toDataURL('image/webp', 0.85)
+                        : canvas.toDataURL('image/jpeg', 0.85);
+                const resizedBase64 = extractBase64Payload(resizedDataUrl);
+                if (!resizedBase64) {
+                    fail();
+                    return;
+                }
+                finalize(
+                    resizedBase64,
+                    mimeType === 'image/png' || mimeType === 'image/webp' ? mimeType : 'image/jpeg',
+                );
+            };
+            img.src = dataUrl;
+        };
+        reader.readAsDataURL(file);
+    });
+}
+
+async function processClipboardItems(
+    items: DataTransferItemList,
+): Promise<AttachmentPart[]> {
+    const results: AttachmentPart[] = [];
+    for (const item of Array.from(items)) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+            const file = item.getAsFile();
+            if (file) {
+                const part = await processImageFile(file, 'clipboard');
+                if (part) results.push(part);
+            }
+        }
+    }
+    return results;
+}
+
 function toReplayParts(msg: MessageNode) {
     if (msg.role !== 'assistant') {
-        return [{ text: msg.content }] as Part[];
+        const parts: Part[] = [{ text: msg.content }];
+        for (const att of msg.attachments ?? []) {
+            parts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
+        }
+        return parts;
     }
 
     return (msg.events ?? []).flatMap<Part>((event) => {
@@ -247,9 +358,57 @@ export function ChatView() {
     const [thoughtsTokenCount, setThoughtsTokenCount] = useState(0);
     const [isSessionsOpen, setIsSessionsOpen] = useState(false);
     const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
+    const [attachments, setAttachments] = useState<AttachmentPart[]>([]);
+    const [isDraggingOver, setIsDraggingOver] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
+
+    const addAttachments = (parts: AttachmentPart[]) => {
+        setAttachments((prev) => [...prev, ...parts]);
+    };
+
+    const removeAttachment = (id: string) => {
+        setAttachments((prev) => prev.filter((a) => a.id !== id));
+    };
+
+    const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        const hasImage = Array.from(e.clipboardData.items).some(
+            (item) => item.kind === 'file' && item.type.startsWith('image/'),
+        );
+        if (!hasImage) return;
+
+        e.preventDefault();
+        const parts = await processClipboardItems(e.clipboardData.items);
+        if (parts.length > 0) {
+            addAttachments(parts);
+        }
+    };
+
+    const handleDragOver = (e: React.DragEvent) => {
+        if (Array.from(e.dataTransfer.items).some((item) => item.type.startsWith('image/'))) {
+            e.preventDefault();
+            setIsDraggingOver(true);
+        }
+    };
+
+    const handleDragLeave = () => setIsDraggingOver(false);
+
+    const handleDrop = async (e: React.DragEvent) => {
+        e.preventDefault();
+        setIsDraggingOver(false);
+        const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'));
+        const parts = await Promise.all(files.map((f) => processImageFile(f, 'drop')));
+        addAttachments(parts.filter(Boolean) as AttachmentPart[]);
+    };
+
+    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(e.target.files ?? []);
+        const parts = await Promise.all(files.map((f) => processImageFile(f, 'file')));
+        addAttachments(parts.filter(Boolean) as AttachmentPart[]);
+        e.target.value = '';
+    };
 
     const path = getPath(activeNodeId);
     const visibleImportEnvelope = previewImportEnvelope ?? importEnvelope;
@@ -275,7 +434,7 @@ export function ChatView() {
     };
 
     const handleSend = async () => {
-        if (!input.trim() || !apiKey) return;
+        if ((!input.trim() && attachments.length === 0) || !apiKey) return;
 
         const controller = new AbortController();
         abortControllerRef.current = controller;
@@ -287,11 +446,13 @@ export function ChatView() {
             parentId,
             role: 'user',
             content: input,
+            attachments: attachments.length > 0 ? attachments : undefined,
             memoryPatches: [],
             summary: getTextSummary(input),
         });
 
         setInput('');
+        setAttachments([]);
         setIsTyping(true);
         setStreamingEvents([]);
         setThoughtsTokenCount(0);
@@ -571,7 +732,21 @@ export function ChatView() {
                                         fallbackText={msg.content}
                                     />
                                 ) : (
-                                    <div className="whitespace-pre-wrap">{msg.content}</div>
+                                    <div>
+                                        {(msg.attachments?.length ?? 0) > 0 && (
+                                            <div className="mb-2 flex flex-wrap gap-2">
+                                                {msg.attachments!.map((att) => (
+                                                    <img
+                                                        key={att.id}
+                                                        src={`data:${att.mimeType};base64,${att.data}`}
+                                                        alt={att.name ?? 'attachment'}
+                                                        className="max-h-48 max-w-full rounded-lg object-contain"
+                                                    />
+                                                ))}
+                                            </div>
+                                        )}
+                                        {msg.content && <div className="whitespace-pre-wrap">{msg.content}</div>}
+                                    </div>
                                 )}
 
                                 <button
@@ -621,7 +796,12 @@ export function ChatView() {
                 )}
             </div>
 
-            <div className="p-4 bg-white border-t border-slate-100 shrink-0">
+            <div
+                className={`p-4 bg-white border-t border-slate-100 shrink-0 transition-colors ${isDraggingOver ? 'bg-blue-50 border-blue-300' : ''}`}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+            >
                 {!apiKey ? (
                     <div className="flex items-center gap-2 bg-amber-50 rounded-xl p-3 border border-amber-200">
                         <KeyRound className="w-4 h-4 text-amber-600" />
@@ -636,44 +816,100 @@ export function ChatView() {
                         <button className="text-xs bg-amber-600 text-white px-2 py-1 rounded shadow-sm hover:bg-amber-700" onClick={(e) => setApiKey((e.currentTarget.previousElementSibling as HTMLInputElement).value)}>Save</button>
                     </div>
                 ) : (
-                    <div className="relative flex items-end gap-2">
-                        <textarea
-                            ref={textareaRef}
-                            value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter' && !e.shiftKey) {
-                                    e.preventDefault();
-                                    handleSend();
-                                }
-                            }}
-                            disabled={isTyping}
-                            placeholder={
-                                !activeNodeId ? 'Start a new conversation...' :
-                                path[path.length - 1]?.role === 'user' ? 'Try an alternative prompt...' :
-                                'Reply to this message...'
-                            }
-                            className="flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 pl-4 py-3.5 pr-4 text-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all shadow-inner disabled:opacity-50 overflow-y-auto"
-                            rows={1}
-                            style={{ maxHeight: '160px' }}
-                        />
-                        {isTyping ? (
-                            <button
-                                onClick={handleStop}
-                                className="shrink-0 p-2.5 rounded-xl bg-slate-700 text-white hover:bg-slate-800 transition-colors shadow-sm"
-                                title="Stop streaming response"
-                            >
-                                <Square className="w-4 h-4 fill-current" />
-                            </button>
-                        ) : (
-                            <button
-                                onClick={handleSend}
-                                disabled={!input.trim()}
-                                className="shrink-0 p-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors shadow-sm"
-                            >
-                                <Send className="w-4 h-4" />
-                            </button>
+                    <div className="flex flex-col gap-2">
+                        {/* Attachment preview chips */}
+                        {attachments.length > 0 && (
+                            <div className="flex flex-wrap gap-2">
+                                {attachments.map((att) => (
+                                    <div key={att.id} className="group/chip relative rounded-lg overflow-hidden border border-slate-200 shadow-sm">
+                                        <img
+                                            src={`data:${att.mimeType};base64,${att.data}`}
+                                            alt={att.name ?? 'image'}
+                                            className="h-16 w-16 object-cover"
+                                        />
+                                        <button
+                                            onClick={() => removeAttachment(att.id)}
+                                            className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover/chip:opacity-100 transition-opacity"
+                                            title="Remove"
+                                        >
+                                            <X className="h-4 w-4 text-white" />
+                                        </button>
+                                    </div>
+                                ))}
+                                {isDraggingOver && (
+                                    <div className="h-16 w-16 rounded-lg border-2 border-dashed border-blue-400 flex items-center justify-center">
+                                        <ImageIcon className="h-5 w-5 text-blue-400" />
+                                    </div>
+                                )}
+                            </div>
                         )}
+
+                        {isDraggingOver && attachments.length === 0 && (
+                            <div className="flex items-center justify-center gap-2 rounded-xl border-2 border-dashed border-blue-400 bg-blue-50 py-4 text-sm font-medium text-blue-600">
+                                <ImageIcon className="h-4 w-4" />
+                                Drop image to attach
+                            </div>
+                        )}
+
+                        <div className="flex items-end gap-2">
+                            {/* Hidden file input */}
+                            <input
+                                ref={fileInputRef}
+                                type="file"
+                                accept="image/jpeg,image/png,image/webp,image/gif"
+                                multiple
+                                className="hidden"
+                                onChange={handleFileSelect}
+                            />
+                            <button
+                                onClick={() => fileInputRef.current?.click()}
+                                disabled={isTyping}
+                                className="shrink-0 p-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-500 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 disabled:opacity-50 transition-colors"
+                                title="Attach image"
+                            >
+                                <Paperclip className="w-4 h-4" />
+                            </button>
+
+                            <textarea
+                                ref={textareaRef}
+                                value={input}
+                                onChange={(e) => setInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && !e.shiftKey) {
+                                        e.preventDefault();
+                                        handleSend();
+                                    }
+                                }}
+                                onPaste={handlePaste}
+                                disabled={isTyping}
+                                placeholder={
+                                    isDraggingOver ? 'Drop image here...' :
+                                    !activeNodeId ? 'Start a new conversation...' :
+                                    path[path.length - 1]?.role === 'user' ? 'Try an alternative prompt...' :
+                                    'Reply or paste an image...'
+                                }
+                                className="flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 pl-4 py-3.5 pr-4 text-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all shadow-inner disabled:opacity-50 overflow-y-auto"
+                                rows={1}
+                                style={{ maxHeight: '160px' }}
+                            />
+                            {isTyping ? (
+                                <button
+                                    onClick={handleStop}
+                                    className="shrink-0 p-2.5 rounded-xl bg-slate-700 text-white hover:bg-slate-800 transition-colors shadow-sm"
+                                    title="Stop streaming response"
+                                >
+                                    <Square className="w-4 h-4 fill-current" />
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={handleSend}
+                                    disabled={!input.trim() && attachments.length === 0}
+                                    className="shrink-0 p-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors shadow-sm"
+                                >
+                                    <Send className="w-4 h-4" />
+                                </button>
+                            )}
+                        </div>
                     </div>
                 )}
                 <div className="mt-2 text-center">

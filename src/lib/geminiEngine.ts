@@ -118,7 +118,11 @@ export function extractThoughtsTokenCount(response: GenerateContentResponse): nu
 
 function toModelParts(node: MessageNode): Part[] {
     if (node.role !== 'assistant') {
-        return [{ text: node.content }];
+        const parts: Part[] = [{ text: node.content }];
+        for (const att of node.attachments ?? []) {
+            parts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
+        }
+        return parts;
     }
 
     const prefixParts: Part[] = node.mergeContext
