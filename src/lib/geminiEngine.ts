@@ -187,29 +187,66 @@ CRITICAL: EASE Protocol active. No JSON arrays allowed in memory files. Use key-
     };
 }
 
+async function* abortableStream(
+    stream: AsyncGenerator<GenerateContentResponse>,
+    signal: AbortSignal,
+): AsyncGenerator<GenerateContentResponse> {
+    let aborted = signal.aborted;
+    const handleAbort = () => {
+        aborted = true;
+        void stream.return?.(undefined);
+    };
+
+    signal.addEventListener('abort', handleAbort, { once: true });
+
+    try {
+        for await (const chunk of stream) {
+            if (aborted) {
+                await stream.return?.(undefined);
+                return;
+            }
+            yield chunk;
+        }
+    } finally {
+        signal.removeEventListener('abort', handleAbort);
+        if (aborted) {
+            await stream.return?.(undefined);
+        }
+    }
+}
+
 export async function generateGeminiResponseStreamFromContents(
     contents: Content[],
     memoryState: string,
     apiKey: string,
+    signal?: AbortSignal,
 ) {
     const client = initGemini(apiKey);
 
-    return client.models.generateContentStream({
+    const stream = await client.models.generateContentStream({
         model: 'gemini-2.5-flash',
         contents,
         config: getGenerationConfig(memoryState),
     });
+
+    if (signal) {
+        return abortableStream(stream, signal);
+    }
+
+    return stream;
 }
 
 export async function generateGeminiResponseStream(
     chatPath: MessageNode[],
     memoryState: string,
     apiKey: string,
+    signal?: AbortSignal,
 ) {
     return generateGeminiResponseStreamFromContents(
         toGeminiContents(chatPath),
         memoryState,
         apiKey,
+        signal,
     );
 }
 

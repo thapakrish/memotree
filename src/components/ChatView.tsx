@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useRef, useState } from 'react';
-import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye } from 'lucide-react';
+import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square } from 'lucide-react';
 import type { Content, FunctionCall, GenerateContentResponse, Part } from '@google/genai';
 import { useGraphStore } from '../store/useGraphStore';
 import type { ChatEvent, MessageNode } from '../store/types';
@@ -18,6 +18,7 @@ import { appendEvent, getFinalAnswerText, getNodeSummary, mergeEvents } from '..
 import { reconstructMemory } from '../lib/memoryEngine';
 import { SessionsModal } from './SessionsModal';
 import { ImportSuggestionsModal } from './ImportSuggestionsModal';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 function getTextSummary(text: string): string {
     return text.length > 40 ? `${text.slice(0, 40)}...` : text;
@@ -112,18 +113,52 @@ async function collectStreamedAssistantResponse(
     };
 }
 
+function CopyMessageButton({ text }: { text: string }) {
+    const [copied, setCopied] = useState(false);
+    const [failed, setFailed] = useState(false);
+
+    const handleCopy = async () => {
+        try {
+            await navigator.clipboard.writeText(text);
+            setFailed(false);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        } catch {
+            setFailed(true);
+            setCopied(false);
+            setTimeout(() => setFailed(false), 2000);
+        }
+    };
+
+    return (
+        <button
+            onClick={handleCopy}
+            title="Copy message"
+            className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-500 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 hover:text-slate-700"
+        >
+            {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+            {copied ? 'Copied' : failed ? 'Failed' : 'Copy'}
+        </button>
+    );
+}
+
 function AssistantMessageBody({
     events,
     fallbackText,
+    isStreaming,
 }: {
     events?: ChatEvent[];
     fallbackText: string;
+    isStreaming?: boolean;
 }) {
     const messageEvents = events ?? [];
 
     if (messageEvents.length === 0) {
-        return <div className="whitespace-pre-wrap">{fallbackText}</div>;
+        return <MarkdownRenderer text={fallbackText} isStreaming={isStreaming} />;
     }
+
+    const lastTextIndex = messageEvents.reduce((last, event, i) =>
+        event.kind === 'text' ? i : last, -1);
 
     return (
         <div className="space-y-3">
@@ -133,7 +168,7 @@ function AssistantMessageBody({
                         return (
                             <details
                                 key={`${event.kind}-${event.signature ?? index}-${index}`}
-                                className="group rounded-xl border border-amber-200 bg-amber-50/80"
+                                className="group/thought rounded-xl border border-amber-200 bg-amber-50/80"
                             >
                                 <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700 marker:content-none">
                                     <BrainCircuit className="h-3.5 w-3.5" />
@@ -141,8 +176,8 @@ function AssistantMessageBody({
                                         Thinking
                                         {event.tokenCount ? ` · ${event.tokenCount.toLocaleString()} tokens` : ''}
                                     </span>
-                                    <span className="text-[10px] normal-case tracking-normal text-amber-600 group-open:hidden">Show</span>
-                                    <span className="hidden text-[10px] normal-case tracking-normal text-amber-600 group-open:inline">Hide</span>
+                                    <span className="text-[10px] normal-case tracking-normal text-amber-600 group-open/thought:hidden">Show</span>
+                                    <span className="hidden text-[10px] normal-case tracking-normal text-amber-600 group-open/thought:inline">Hide</span>
                                 </summary>
                                 <div className="border-t border-amber-200 px-3 py-3 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
                                     {event.text}
@@ -163,12 +198,12 @@ function AssistantMessageBody({
                         );
                     case 'tool_result':
                         return (
-                            <details key={`${event.kind}-${event.callId ?? index}`} className="group rounded-xl border border-emerald-200 bg-emerald-50/80">
+                            <details key={`${event.kind}-${event.callId ?? index}`} className="group/result rounded-xl border border-emerald-200 bg-emerald-50/80">
                                 <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-700 marker:content-none">
                                     {event.status === 'success' ? <CheckCircle2 className="h-3.5 w-3.5" /> : <CircleAlert className="h-3.5 w-3.5" />}
                                     <span className="flex-1">{event.summary}</span>
-                                    <span className="text-[10px] normal-case tracking-normal text-emerald-600 group-open:hidden">Show</span>
-                                    <span className="hidden text-[10px] normal-case tracking-normal text-emerald-600 group-open:inline">Hide</span>
+                                    <span className="text-[10px] normal-case tracking-normal text-emerald-600 group-open/result:hidden">Show</span>
+                                    <span className="hidden text-[10px] normal-case tracking-normal text-emerald-600 group-open/result:inline">Hide</span>
                                 </summary>
                                 {event.payload !== undefined && (
                                     <pre className="overflow-x-auto border-t border-emerald-200 px-3 py-3 text-xs leading-relaxed text-emerald-900 whitespace-pre-wrap">
@@ -179,9 +214,11 @@ function AssistantMessageBody({
                         );
                     case 'text':
                         return (
-                            <div key={`${event.kind}-${index}`} className="whitespace-pre-wrap">
-                                {event.text}
-                            </div>
+                            <MarkdownRenderer
+                                key={`${event.kind}-${index}`}
+                                text={event.text}
+                                isStreaming={isStreaming && index === lastTextIndex}
+                            />
                         );
                 }
             })}
@@ -211,6 +248,8 @@ export function ChatView() {
     const [isSessionsOpen, setIsSessionsOpen] = useState(false);
     const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const abortControllerRef = useRef<AbortController | null>(null);
 
     const path = getPath(activeNodeId);
     const visibleImportEnvelope = previewImportEnvelope ?? importEnvelope;
@@ -223,8 +262,23 @@ export function ChatView() {
         }
     }, [streamingEvents, isTyping, path.length]);
 
+    // Auto-resize textarea
+    useEffect(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.style.height = 'auto';
+        el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    }, [input]);
+
+    const handleStop = () => {
+        abortControllerRef.current?.abort();
+    };
+
     const handleSend = async () => {
         if (!input.trim() || !apiKey) return;
+
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
 
         const activeNode = path.length > 0 ? path[path.length - 1] : null;
         const parentId = activeNode?.role === 'user' ? activeNode.parentId : activeNodeId;
@@ -245,7 +299,7 @@ export function ChatView() {
         try {
             const newPath = getPath(userNodeId);
             const memoryState = reconstructMemory(newPath);
-            const initialStream = await generateGeminiResponseStream(newPath, memoryState, apiKey);
+            const initialStream = await generateGeminiResponseStream(newPath, memoryState, apiKey, controller.signal);
             const initialResponse = await collectStreamedAssistantResponse(
                 initialStream,
                 setStreamingEvents,
@@ -258,7 +312,7 @@ export function ChatView() {
             let pendingFunctionCalls = initialResponse.functionCalls;
             let toolRounds = 0;
 
-            while (pendingFunctionCalls.length > 0 && toolRounds < MAX_TOOL_ROUNDS) {
+            while (pendingFunctionCalls.length > 0 && toolRounds < MAX_TOOL_ROUNDS && !controller.signal.aborted) {
                 toolRounds += 1;
                 const functionResponses: Array<{ id?: string; name: string; response: Record<string, unknown> }> = [];
 
@@ -327,6 +381,7 @@ export function ChatView() {
                     followUpContents,
                     nextMemoryState,
                     apiKey,
+                    controller.signal,
                 );
                 const followUpResponse = await collectStreamedAssistantResponse(
                     followUpStream,
@@ -338,7 +393,7 @@ export function ChatView() {
                 pendingFunctionCalls = followUpResponse.functionCalls;
             }
 
-            if (pendingFunctionCalls.length > 0) {
+            if (pendingFunctionCalls.length > 0 && !controller.signal.aborted) {
                 events = appendEvent(events, {
                     kind: 'tool_result',
                     toolName: 'tool_loop_guard',
@@ -353,16 +408,18 @@ export function ChatView() {
                 });
             }
 
-            const assistantText = getAssistantText(events) || 'Tool ran with no user-facing answer';
-
-            addNode({
-                parentId: userNodeId,
-                role: 'assistant',
-                content: assistantText,
-                events,
-                memoryPatches: patches,
-                summary: getNodeSummary({ role: 'assistant', events, content: assistantText }),
-            });
+            // Only save node if we got something (even if aborted mid-stream)
+            if (events.length > 0) {
+                const assistantText = getAssistantText(events) || 'Tool ran with no user-facing answer';
+                addNode({
+                    parentId: userNodeId,
+                    role: 'assistant',
+                    content: assistantText,
+                    events,
+                    memoryPatches: patches,
+                    summary: getNodeSummary({ role: 'assistant', events, content: assistantText }),
+                });
+            }
         } catch (err) {
             console.error(err);
             alert('API request failed. Check API Key or console.');
@@ -370,6 +427,7 @@ export function ChatView() {
             setIsTyping(false);
             setStreamingEvents([]);
             setThoughtsTokenCount(0);
+            abortControllerRef.current = null;
         }
     };
 
@@ -486,7 +544,7 @@ export function ChatView() {
                     path.map((msg: MessageNode) => (
                         <div
                             key={msg.id}
-                            className={`flex flex-col max-w-[85%] ${msg.role === 'user' ? 'ml-auto items-end' : 'mr-auto items-start'}`}
+                            className={`group flex flex-col max-w-[85%] ${msg.role === 'user' ? 'ml-auto items-end' : 'mr-auto items-start'}`}
                         >
                             <div className="flex items-center gap-2 mb-1 px-1">
                                 {msg.role === 'user' ? (
@@ -502,7 +560,7 @@ export function ChatView() {
                                 )}
                             </div>
                             <div
-                                className={`p-4 rounded-2xl shadow-sm text-[15px] leading-relaxed relative group ${msg.role === 'user'
+                                className={`p-4 rounded-2xl shadow-sm text-[15px] leading-relaxed relative ${msg.role === 'user'
                                     ? 'bg-blue-600 text-white rounded-tr-sm'
                                     : 'bg-white border border-slate-200 text-slate-800 rounded-tl-sm'
                                     }`}
@@ -525,8 +583,15 @@ export function ChatView() {
                                 </button>
                             </div>
 
+                            <div className={`mt-1.5 flex items-center gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                <CopyMessageButton text={msg.role === 'assistant'
+                                    ? (getFinalAnswerText(msg.events ?? []) || msg.content)
+                                    : msg.content}
+                                />
+                            </div>
+
                             {(msg.memoryPatches?.length ?? 0) > 0 && (
-                                <div className="mt-2 text-[11px] font-mono text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100 self-start">
+                                <div className="mt-1 text-[11px] font-mono text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100 self-start">
                                     + Memory Patched
                                 </div>
                             )}
@@ -544,6 +609,7 @@ export function ChatView() {
                                 <AssistantMessageBody
                                     events={streamingDisplayEvents}
                                     fallbackText={getFinalAnswerText(streamingDisplayEvents)}
+                                    isStreaming
                                 />
                             ) : (
                                 <div className="flex items-center gap-2 text-slate-400 h-6">
@@ -570,8 +636,9 @@ export function ChatView() {
                         <button className="text-xs bg-amber-600 text-white px-2 py-1 rounded shadow-sm hover:bg-amber-700" onClick={(e) => setApiKey((e.currentTarget.previousElementSibling as HTMLInputElement).value)}>Save</button>
                     </div>
                 ) : (
-                    <div className="relative flex items-center">
+                    <div className="relative flex items-end gap-2">
                         <textarea
+                            ref={textareaRef}
                             value={input}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={(e) => {
@@ -586,16 +653,27 @@ export function ChatView() {
                                 path[path.length - 1]?.role === 'user' ? 'Try an alternative prompt...' :
                                 'Reply to this message...'
                             }
-                            className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 pl-4 py-3.5 pr-12 text-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all shadow-inner disabled:opacity-50"
+                            className="flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 pl-4 py-3.5 pr-4 text-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all shadow-inner disabled:opacity-50 overflow-y-auto"
                             rows={1}
+                            style={{ maxHeight: '160px' }}
                         />
-                        <button
-                            onClick={handleSend}
-                            disabled={!input.trim() || isTyping}
-                            className="absolute right-2 p-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors shadow-sm"
-                        >
-                            <Send className="w-4 h-4" />
-                        </button>
+                        {isTyping ? (
+                            <button
+                                onClick={handleStop}
+                                className="shrink-0 p-2.5 rounded-xl bg-slate-700 text-white hover:bg-slate-800 transition-colors shadow-sm"
+                                title="Stop streaming response"
+                            >
+                                <Square className="w-4 h-4 fill-current" />
+                            </button>
+                        ) : (
+                            <button
+                                onClick={handleSend}
+                                disabled={!input.trim()}
+                                className="shrink-0 p-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors shadow-sm"
+                            >
+                                <Send className="w-4 h-4" />
+                            </button>
+                        )}
                     </div>
                 )}
                 <div className="mt-2 text-center">
