@@ -11,6 +11,7 @@ import { SessionsModal } from './SessionsModal';
 import { ImportSuggestionsModal } from './ImportSuggestionsModal';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ContextInspector } from './ContextInspector';
+import { featureFlags, isImageOnlyAttachmentMode } from '../config/featureFlags';
 
 function getTextSummary(text: string): string {
     return text.length > 40 ? `${text.slice(0, 40)}...` : text;
@@ -429,10 +430,14 @@ export function ChatView() {
     };
 
     const isAttachableFile = (type: string) =>
-        type.startsWith('image/') || type === 'application/pdf' || type.startsWith('audio/');
+        type.startsWith('image/') || (!isImageOnlyAttachmentMode() && (type === 'application/pdf' || type.startsWith('audio/')));
 
     const processAnyFile = (f: File, src: AttachmentPart['sourceType']) =>
-        f.type.startsWith('image/') ? processImageFile(f, src) : processBinaryFile(f, src);
+        f.type.startsWith('image/')
+            ? processImageFile(f, src)
+            : isImageOnlyAttachmentMode()
+                ? Promise.resolve(null)
+                : processBinaryFile(f, src);
 
     const handleDragOver = (e: React.DragEvent) => {
         if (!provider?.capabilities.supportsFileAttachments) return;
@@ -820,9 +825,11 @@ export function ChatView() {
                     importEnvelope={visibleImportEnvelope ?? undefined}
                     compactions={compactions}
                     isCompacting={isCompacting}
-                    canCompact={getCompactionRange() !== null}
+                    canCompact={featureFlags.contextCompaction && getCompactionRange() !== null}
                     onCompactPath={handleCompactPath}
                     onRemoveCompaction={removeCompaction}
+                    showCompactionControls={featureFlags.contextCompaction}
+                    showImportProvenance={featureFlags.importProvenanceWarnings}
                 />
             )}
 
@@ -841,65 +848,69 @@ export function ChatView() {
                                 {visibleImportEnvelope.sourceConversationId ? ` · source ${visibleImportEnvelope.sourceConversationId.slice(0, 8)}` : ''}
                             </div>
                         )}
-                        <div className="mt-3 flex items-center gap-3">
-                            <button
-                                onClick={() => setIsSuggestionsOpen(true)}
-                                className="inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-semibold text-violet-700 transition-colors hover:border-violet-300 hover:bg-violet-100"
-                            >
-                                <GitBranch className="h-3.5 w-3.5" />
-                                <span>Review Suggestions</span>
-                            </button>
-                            {previewImportEnvelope ? (
-                                <>
+                        {featureFlags.importInference && (
+                            <>
+                                <div className="mt-3 flex items-center gap-3">
                                     <button
-                                        onClick={() => applyAcceptedImportSuggestions()}
-                                        disabled={acceptedSuggestionCount === 0}
-                                        className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                        onClick={() => setIsSuggestionsOpen(true)}
+                                        className="inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-semibold text-violet-700 transition-colors hover:border-violet-300 hover:bg-violet-100"
                                     >
                                         <GitBranch className="h-3.5 w-3.5" />
-                                        <span>Apply Preview</span>
+                                        <span>Review Suggestions</span>
                                     </button>
+                                    {previewImportEnvelope ? (
+                                        <>
+                                            <button
+                                                onClick={() => applyAcceptedImportSuggestions()}
+                                                disabled={acceptedSuggestionCount === 0}
+                                                className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                <GitBranch className="h-3.5 w-3.5" />
+                                                <span>Apply Preview</span>
+                                            </button>
+                                            <button
+                                                onClick={() => clearImportPreview()}
+                                                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-100"
+                                            >
+                                                <Eye className="h-3.5 w-3.5" />
+                                                <span>Exit Preview</span>
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <button
+                                            onClick={() => applyAcceptedImportSuggestions()}
+                                            disabled={acceptedSuggestionCount === 0}
+                                            className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            <GitBranch className="h-3.5 w-3.5" />
+                                            <span>Apply Accepted</span>
+                                        </button>
+                                    )}
                                     <button
-                                        onClick={() => clearImportPreview()}
-                                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-100"
+                                        onClick={() => undoLastImportApply()}
+                                        disabled={!lastImportApplySnapshot}
+                                        className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
                                     >
-                                        <Eye className="h-3.5 w-3.5" />
-                                        <span>Exit Preview</span>
+                                        <Undo2 className="h-3.5 w-3.5" />
+                                        <span>Undo Apply</span>
                                     </button>
-                                </>
-                            ) : (
-                                <button
-                                    onClick={() => applyAcceptedImportSuggestions()}
-                                    disabled={acceptedSuggestionCount === 0}
-                                    className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                    <GitBranch className="h-3.5 w-3.5" />
-                                    <span>Apply Accepted</span>
-                                </button>
-                            )}
-                            <button
-                                onClick={() => undoLastImportApply()}
-                                disabled={!lastImportApplySnapshot}
-                                className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                                <Undo2 className="h-3.5 w-3.5" />
-                                <span>Undo Apply</span>
-                            </button>
-                            <span className="text-xs text-violet-700">
-                                {acceptedSuggestionCount} accepted, {pendingSuggestionCount} pending
-                            </span>
-                        </div>
-                        {previewImportEnvelope && (
-                            <div className="mt-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs leading-relaxed text-blue-700">
-                                Previewing inferred graph changes. Apply to commit or exit preview to discard.
-                            </div>
+                                    <span className="text-xs text-violet-700">
+                                        {acceptedSuggestionCount} accepted, {pendingSuggestionCount} pending
+                                    </span>
+                                </div>
+                                {previewImportEnvelope && (
+                                    <div className="mt-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs leading-relaxed text-blue-700">
+                                        Previewing inferred graph changes. Apply to commit or exit preview to discard.
+                                    </div>
+                                )}
+                            </>
                         )}
-                        {visibleImportEnvelope.hiddenContext.notes?.[0] && (
+                        {featureFlags.importProvenanceWarnings && visibleImportEnvelope.hiddenContext.notes?.[0] && (
                             <div className="mt-2 text-xs leading-relaxed text-violet-700">
                                 {visibleImportEnvelope.hiddenContext.notes[0]}
                             </div>
                         )}
-                        {(visibleImportEnvelope.importWarnings?.length ?? 0) > 0 && (
+                        {featureFlags.importProvenanceWarnings && (visibleImportEnvelope.importWarnings?.length ?? 0) > 0 && (
                             <div className="mt-2 rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs leading-relaxed text-violet-700">
                                 {visibleImportEnvelope.importWarnings?.join(' ')}
                             </div>
@@ -1194,7 +1205,7 @@ export function ChatView() {
                                 <input
                                     ref={fileInputRef}
                                     type="file"
-                                    accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/webm,audio/flac"
+                                    accept={isImageOnlyAttachmentMode() ? 'image/jpeg,image/png,image/webp,image/gif' : 'image/jpeg,image/png,image/webp,image/gif,application/pdf,audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/webm,audio/flac'}
                                     multiple
                                     className="hidden"
                                     onChange={handleFileSelect}
@@ -1225,7 +1236,9 @@ export function ChatView() {
                                     isDraggingOver ? 'Drop image here...' :
                                     !activeNodeId ? 'Start a new conversation...' :
                                     path[path.length - 1]?.role === 'user' ? 'Try an alternative prompt...' :
-                                    provider?.capabilities.supportsFileAttachments ? 'Reply, paste an image, or attach a file...' : 'Reply to this message...'
+                                    provider?.capabilities.supportsFileAttachments
+                                        ? (isImageOnlyAttachmentMode() ? 'Reply or attach an image...' : 'Reply, paste an image, or attach a file...')
+                                        : 'Reply to this message...'
                                 }
                                 className="flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 pl-4 py-3.5 pr-4 text-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all shadow-inner disabled:opacity-50 overflow-y-auto"
                                 rows={1}
@@ -1266,7 +1279,9 @@ export function ChatView() {
                 </div>
             </div>
             <SessionsModal isOpen={isSessionsOpen} onClose={() => setIsSessionsOpen(false)} />
-            <ImportSuggestionsModal isOpen={isSuggestionsOpen} onClose={() => setIsSuggestionsOpen(false)} />
+                {featureFlags.importInference && (
+                    <ImportSuggestionsModal isOpen={isSuggestionsOpen} onClose={() => setIsSuggestionsOpen(false)} />
+                )}
         </div>
     );
 }

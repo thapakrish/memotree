@@ -3,6 +3,7 @@ import { Clock3, Download, FolderOpen, History, Import, Plus, Upload, X } from '
 import { deleteSession, exportSessionToFile, importSessionFromJson, listSessions, loadLastSession, renameSessionTitle, type PersistedSession } from '../lib/sessionPersistence';
 import { useGraphStore } from '../store/useGraphStore';
 import { ImportChatModal } from './ImportChatModal';
+import { featureFlags } from '../config/featureFlags';
 
 interface SessionsModalProps {
     isOpen: boolean;
@@ -207,20 +208,22 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
                         </p>
                     </button>
 
-                    <button
-                        onClick={() => setIsImportOpen(true)}
-                        className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-left transition-colors hover:border-violet-300 hover:bg-violet-50"
-                    >
-                        <div className="mb-3 flex items-center gap-3">
-                            <div className="rounded-xl bg-violet-600 p-2 text-white">
-                                <Import className="h-4 w-4" />
+                    {featureFlags.experimentalImports && (
+                        <button
+                            onClick={() => setIsImportOpen(true)}
+                            className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-left transition-colors hover:border-violet-300 hover:bg-violet-50"
+                        >
+                            <div className="mb-3 flex items-center gap-3">
+                                <div className="rounded-xl bg-violet-600 p-2 text-white">
+                                    <Import className="h-4 w-4" />
+                                </div>
+                                <div className="text-sm font-semibold text-slate-800">Import Chat</div>
                             </div>
-                            <div className="text-sm font-semibold text-slate-800">Import Chat</div>
-                        </div>
-                        <p className="text-sm leading-relaxed text-slate-500">
-                            Paste a linear transcript from another chat app and turn it into a MemoTree session.
-                        </p>
-                    </button>
+                            <p className="text-sm leading-relaxed text-slate-500">
+                                Paste a linear transcript from another chat app and turn it into a MemoTree session.
+                            </p>
+                        </button>
+                    )}
                     <button
                         onClick={() => fileInputRef.current?.click()}
                         disabled={isImportingFile}
@@ -327,13 +330,15 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
                     )}
                 </div>
             </div>
-            <ImportChatModal
-                isOpen={isImportOpen}
-                onClose={() => {
-                    setIsImportOpen(false);
-                    onClose();
-                }}
-            />
+            {featureFlags.experimentalImports && (
+                <ImportChatModal
+                    isOpen={isImportOpen}
+                    onClose={() => {
+                        setIsImportOpen(false);
+                        onClose();
+                    }}
+                />
+            )}
         </div>
     );
 }

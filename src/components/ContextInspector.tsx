@@ -54,9 +54,24 @@ interface ContextInspectorProps {
     canCompact: boolean;
     onCompactPath: () => void;
     onRemoveCompaction: (id: string) => void;
+    showCompactionControls: boolean;
+    showImportProvenance: boolean;
 }
 
-export function ContextInspector({ path, pendingInput, pendingAttachments, provider, importEnvelope, compactions, isCompacting, canCompact, onCompactPath, onRemoveCompaction }: ContextInspectorProps) {
+export function ContextInspector({
+    path,
+    pendingInput,
+    pendingAttachments,
+    provider,
+    importEnvelope,
+    compactions,
+    isCompacting,
+    canCompact,
+    onCompactPath,
+    onRemoveCompaction,
+    showCompactionControls,
+    showImportProvenance,
+}: ContextInspectorProps) {
     const [exactTokens, setExactTokens] = useState<number | null>(null);
     const [isCounting, setIsCounting] = useState(false);
     const [countError, setCountError] = useState<string | null>(null);
@@ -203,7 +218,7 @@ export function ContextInspector({ path, pendingInput, pendingAttachments, provi
                         </span>
                     </div>
                 )}
-                {importEnvelope && (
+                {showImportProvenance && importEnvelope && (
                     <div className="flex items-center gap-1.5 text-slate-600 col-span-2">
                         <Layers className="h-3 w-3 shrink-0 text-violet-400" />
                         <span>
@@ -234,7 +249,8 @@ export function ContextInspector({ path, pendingInput, pendingAttachments, provi
             )}
 
             {/* Compaction section */}
-            <div className="border-t border-slate-200 pt-3 space-y-2">
+            {showCompactionControls && (
+                <div className="border-t border-slate-200 pt-3 space-y-2">
                 <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                         {isOverDanger && (
@@ -291,7 +307,8 @@ export function ContextInspector({ path, pendingInput, pendingAttachments, provi
                         ))}
                     </div>
                 )}
-            </div>
+                </div>
+            )}
         </div>
     );
 }

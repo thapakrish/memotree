@@ -1,5 +1,6 @@
 import { Command, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, ChevronDown, Keyboard } from 'lucide-react';
 import { useState } from 'react';
+import { featureFlags } from '../config/featureFlags';
 
 const Kbd = ({ children, wide }: { children: React.ReactNode; wide?: boolean }) => (
     <kbd className={`inline-flex items-center justify-center h-5 rounded bg-slate-100 border border-slate-200 text-[10px] font-sans font-medium text-slate-500 shadow-sm ${wide ? 'px-1.5' : 'w-5'}`}>
@@ -56,16 +57,22 @@ export function ShortcutsPanel() {
                 <Row label="Next Branch" keys={<><Kbd><ArrowRight className="w-3 h-3" /></Kbd><Or /><Kbd wide>F</Kbd></>} />
                 <Row label="Go to Root" keys={<><Kbd wide>Shift</Kbd><Plus /><Kbd><ArrowUp className="w-3 h-3" /></Kbd></>} />
 
-                <Divider />
+                {featureFlags.keyboardPowerTools && (
+                    <>
+                        <Divider />
+                        <Row label="Command Palette" keys={<><Kbd><Command className="w-3 h-3" /></Kbd><Kbd wide>K</Kbd></>} />
+                    </>
+                )}
 
-                <Row label="Command Palette" keys={<><Kbd><Command className="w-3 h-3" /></Kbd><Kbd wide>K</Kbd></>} />
-
-                <Divider />
-
-                <Row label="Toggle Select Mode" keys={<Kbd wide>V</Kbd>} />
-                <Row label="Box Select" keys={<><Kbd wide>V</Kbd><Plus /><Kbd wide>Drag</Kbd></>} />
-                <Row label="Add to Selection" keys={<><Kbd wide>Shift</Kbd><Or /><Kbd><Command className="w-3 h-3" /></Kbd><Plus /><Kbd wide>Click</Kbd></>} />
-                <Row label="Clear Selection" keys={<Kbd wide>Esc</Kbd>} />
+                {featureFlags.advancedGraphTools && (
+                    <>
+                        <Divider />
+                        <Row label="Toggle Select Mode" keys={<Kbd wide>V</Kbd>} />
+                        <Row label="Box Select" keys={<><Kbd wide>V</Kbd><Plus /><Kbd wide>Drag</Kbd></>} />
+                        <Row label="Add to Selection" keys={<><Kbd wide>Shift</Kbd><Or /><Kbd><Command className="w-3 h-3" /></Kbd><Plus /><Kbd wide>Click</Kbd></>} />
+                        <Row label="Clear Selection" keys={<Kbd wide>Esc</Kbd>} />
+                    </>
+                )}
 
             </div>
         </div>

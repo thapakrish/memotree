@@ -26,6 +26,7 @@ import { getNodeSummary, mergeEvents } from '../lib/chatEvents';
 import type { ChatEvent, MergeContextMode } from '../store/types';
 import { reconstructMemory } from '../lib/memoryEngine';
 import { buildImportedPathGroups, getImportedPathGroupPositionKey } from '../lib/import/pathGroups';
+import { featureFlags } from '../config/featureFlags';
 
 const nodeTypes = {
     custom: CustomNode,
@@ -206,6 +207,9 @@ export function GraphView() {
 
     useEffect(() => {
         const handleSelectionShortcuts = (event: KeyboardEvent) => {
+            if (!featureFlags.advancedGraphTools) {
+                return;
+            }
             const target = event.target as HTMLElement | null;
             if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
                 return;
@@ -274,9 +278,9 @@ export function GraphView() {
     const selectedNodes = selectedNodeIds
         .map((id) => renderedNodes[id] ?? storeNodes[id])
         .filter(Boolean);
-    const canMergeSelected = selectedNodes.length === 2 && selectedNodes.every(isMergeableAssistant) && !!apiKey;
-    const canGroupSelected = selectedNodes.length > 0;
-    const canCompareSelected = selectedNodes.length === 2;
+    const canMergeSelected = featureFlags.advancedGraphTools && selectedNodes.length === 2 && selectedNodes.every(isMergeableAssistant) && !!apiKey;
+    const canGroupSelected = featureFlags.advancedGraphTools && selectedNodes.length > 0;
+    const canCompareSelected = featureFlags.advancedGraphTools && selectedNodes.length === 2;
 
     const handleMergeSubmit = async (instruction: string, mode: MergeContextMode) => {
         if (!apiKey || selectedNodes.length !== 2) {
@@ -381,48 +385,52 @@ export function GraphView() {
                 <div className="font-semibold text-slate-700 bg-white px-4 py-2 rounded-lg shadow-sm border border-slate-200">
                     Memory Tree Map
                 </div>
-                <button
-                    onClick={handleSelectionModeToggle}
-                    className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold shadow-sm transition-colors ${
-                        isSelectionMode
-                            ? 'border-blue-300 bg-blue-50 text-blue-700'
-                            : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700'
-                    }`}
-                >
-                    {isSelectionMode ? <SquareDashedMousePointer className="h-4 w-4" /> : <MousePointer2 className="h-4 w-4" />}
-                    <span>{isSelectionMode ? 'Selecting Nodes' : 'Select Nodes'}</span>
-                </button>
-                <button
-                    onClick={handleClearSelection}
-                    disabled={selectedNodeIds.length === 0}
-                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                    <span>Clear Selection</span>
-                </button>
-                <button
-                    onClick={() => setIsCompareModalOpen(true)}
-                    disabled={!canCompareSelected}
-                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                    <GitCompare className="h-4 w-4" />
-                    <span>Compare Paths</span>
-                </button>
-                <button
-                    onClick={() => setIsMergeModalOpen(true)}
-                    disabled={!canMergeSelected}
-                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-fuchsia-300 hover:bg-fuchsia-50 hover:text-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                    <GitMerge className="h-4 w-4" />
-                    <span>Merge Selected</span>
-                </button>
-                <button
-                    onClick={() => setIsGroupModalOpen(true)}
-                    disabled={!canGroupSelected}
-                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                    <FolderTree className="h-4 w-4" />
-                    <span>Group Selected</span>
-                </button>
+                {featureFlags.advancedGraphTools && (
+                    <>
+                        <button
+                            onClick={handleSelectionModeToggle}
+                            className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold shadow-sm transition-colors ${
+                                isSelectionMode
+                                    ? 'border-blue-300 bg-blue-50 text-blue-700'
+                                    : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700'
+                            }`}
+                        >
+                            {isSelectionMode ? <SquareDashedMousePointer className="h-4 w-4" /> : <MousePointer2 className="h-4 w-4" />}
+                            <span>{isSelectionMode ? 'Selecting Nodes' : 'Select Nodes'}</span>
+                        </button>
+                        <button
+                            onClick={handleClearSelection}
+                            disabled={selectedNodeIds.length === 0}
+                            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <span>Clear Selection</span>
+                        </button>
+                        <button
+                            onClick={() => setIsCompareModalOpen(true)}
+                            disabled={!canCompareSelected}
+                            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <GitCompare className="h-4 w-4" />
+                            <span>Compare Paths</span>
+                        </button>
+                        <button
+                            onClick={() => setIsMergeModalOpen(true)}
+                            disabled={!canMergeSelected}
+                            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-fuchsia-300 hover:bg-fuchsia-50 hover:text-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <GitMerge className="h-4 w-4" />
+                            <span>Merge Selected</span>
+                        </button>
+                        <button
+                            onClick={() => setIsGroupModalOpen(true)}
+                            disabled={!canGroupSelected}
+                            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <FolderTree className="h-4 w-4" />
+                            <span>Group Selected</span>
+                        </button>
+                    </>
+                )}
             </div>
             <ReactFlow
                 nodes={rfNodes}
@@ -443,40 +451,44 @@ export function GraphView() {
                     }));
                 }}
                 nodeTypes={nodeTypes}
-                elementsSelectable={isSelectionMode}
+                elementsSelectable={featureFlags.advancedGraphTools && isSelectionMode}
                 selectionKeyCode={null}
-                selectionOnDrag={isSelectionMode}
+                selectionOnDrag={featureFlags.advancedGraphTools && isSelectionMode}
                 selectionMode={SelectionMode.Partial}
                 multiSelectionKeyCode={null}
-                panOnDrag={!isSelectionMode}
+                panOnDrag={!featureFlags.advancedGraphTools || !isSelectionMode}
                 fitView
             >
                 <Background />
                 <Controls />
             </ReactFlow>
-            <MergeBranchesModal
-                isOpen={isMergeModalOpen}
-                leftNode={selectedNodes[0]}
-                rightNode={selectedNodes[1]}
-                isSubmitting={isMerging}
-                onClose={() => setIsMergeModalOpen(false)}
-                onSubmit={handleMergeSubmit}
-            />
-            <GroupNodesModal
-                isOpen={isGroupModalOpen}
-                selectedCount={selectedNodes.length}
-                isSubmitting={isGrouping}
-                onClose={() => setIsGroupModalOpen(false)}
-                onSubmit={handleGroupSubmit}
-            />
-            <PathCompareModal
-                isOpen={isCompareModalOpen}
-                leftNode={selectedNodes[0]}
-                rightNode={selectedNodes[1]}
-                getPath={getPath}
-                onClose={() => setIsCompareModalOpen(false)}
-                onNavigate={(id) => setActiveNode(id)}
-            />
+            {featureFlags.advancedGraphTools && (
+                <>
+                    <MergeBranchesModal
+                        isOpen={isMergeModalOpen}
+                        leftNode={selectedNodes[0]}
+                        rightNode={selectedNodes[1]}
+                        isSubmitting={isMerging}
+                        onClose={() => setIsMergeModalOpen(false)}
+                        onSubmit={handleMergeSubmit}
+                    />
+                    <GroupNodesModal
+                        isOpen={isGroupModalOpen}
+                        selectedCount={selectedNodes.length}
+                        isSubmitting={isGrouping}
+                        onClose={() => setIsGroupModalOpen(false)}
+                        onSubmit={handleGroupSubmit}
+                    />
+                    <PathCompareModal
+                        isOpen={isCompareModalOpen}
+                        leftNode={selectedNodes[0]}
+                        rightNode={selectedNodes[1]}
+                        getPath={getPath}
+                        onClose={() => setIsCompareModalOpen(false)}
+                        onNavigate={(id) => setActiveNode(id)}
+                    />
+                </>
+            )}
         </div>
     );
 }

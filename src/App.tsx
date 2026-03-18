@@ -5,6 +5,7 @@ import { CommandPalette } from './components/CommandPalette';
 import { ShortcutsPanel } from './components/ShortcutsPanel';
 import { useGraphStore } from './store/useGraphStore';
 import { useEffect } from 'react';
+import { featureFlags } from './config/featureFlags';
 
 function App() {
   const {
@@ -99,7 +100,7 @@ function App() {
       </div>
       
       {/* Global Command Palette */}
-      <CommandPalette />
+      {featureFlags.keyboardPowerTools && <CommandPalette />}
     </div>
   );
 }

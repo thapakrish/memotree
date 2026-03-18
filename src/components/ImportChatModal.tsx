@@ -6,6 +6,7 @@ import { normalizeTranscript } from '../lib/import/normalizeTranscript';
 import { inferStructureRules } from '../lib/import/inferStructureRules';
 import { detectSharedImportUrl, fetchSharedTranscriptFromUrl } from '../lib/import/sharedUrl';
 import { SHARED_IMPORT_ENDPOINT } from '../lib/import/sharedImportApi';
+import { featureFlags } from '../config/featureFlags';
 
 interface ImportChatModalProps {
     isOpen: boolean;
@@ -33,7 +34,10 @@ export function ImportChatModal({ isOpen, onClose }: ImportChatModalProps) {
         text,
         formatHint: 'auto',
     }), [sourcePlatform, text]);
-    const suggestions = useMemo(() => inferStructureRules(normalized.turns), [normalized.turns]);
+    const suggestions = useMemo(
+        () => featureFlags.importInference ? inferStructureRules(normalized.turns) : [],
+        [normalized.turns],
+    );
     const highConfidenceSuggestions = suggestions.filter((suggestion) => suggestion.confidence === 'high');
     const sharedUrlDetection = useMemo(() => detectSharedImportUrl(sharedUrl), [sharedUrl]);
 
@@ -47,6 +51,10 @@ export function ImportChatModal({ isOpen, onClose }: ImportChatModalProps) {
 
         try {
             if (importMode === 'url') {
+                if (!featureFlags.sharedUrlImport) {
+                    setUrlImportError('Shared URL import is disabled for MVP.');
+                    return;
+                }
                 if (!sharedUrlDetection?.isSupported) {
                     setUrlImportError('Paste a supported public shared URL from ChatGPT, Gemini, or Claude.');
                     return;
@@ -130,8 +138,9 @@ export function ImportChatModal({ isOpen, onClose }: ImportChatModalProps) {
                                         name="import-mode"
                                         checked={importMode === 'url'}
                                         onChange={() => setImportMode('url')}
+                                        disabled={!featureFlags.sharedUrlImport}
                                     />
-                                    <span className="text-sm font-medium text-slate-700">Shared URL</span>
+                                    <span className={`text-sm font-medium ${featureFlags.sharedUrlImport ? 'text-slate-700' : 'text-slate-400'}`}>Shared URL</span>
                                 </label>
                             </div>
                         </div>
@@ -164,8 +173,12 @@ export function ImportChatModal({ isOpen, onClose }: ImportChatModalProps) {
                             {importMode === 'transcript' ? (
                                 <>
                                     <div className="mt-2 text-sm text-slate-700">{normalized.turns.length} turns detected</div>
-                                    <div className="mt-1 text-sm text-slate-700">{suggestions.length} structure suggestions</div>
-                                    <div className="mt-1 text-xs text-slate-500">{highConfidenceSuggestions.length} high-confidence suggestions will be attached for later review.</div>
+                                    {featureFlags.importInference && (
+                                        <>
+                                            <div className="mt-1 text-sm text-slate-700">{suggestions.length} structure suggestions</div>
+                                            <div className="mt-1 text-xs text-slate-500">{highConfidenceSuggestions.length} high-confidence suggestions will be attached for later review.</div>
+                                        </>
+                                    )}
                                 </>
                             ) : (
                                 <>
@@ -173,9 +186,9 @@ export function ImportChatModal({ isOpen, onClose }: ImportChatModalProps) {
                                         {sharedUrlDetection ? sharedUrlDetection.label : 'Paste a share URL to detect provider'}
                                     </div>
                                     <div className="mt-1 text-xs text-slate-500">
-                                        {sharedUrlDetection?.isSupported
+                                        {sharedUrlDetection?.isSupported && featureFlags.sharedUrlImport
                                             ? 'Provider detected. The local server adapter will try a provider-aware parser, then fall back to generic extraction.'
-                                            : 'Only public share links from known providers will be supported here.'}
+                                            : 'Only public share links from known providers will be supported here when shared URL import is enabled.'}
                                     </div>
                                 </>
                             )}
