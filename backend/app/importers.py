@@ -104,20 +104,4 @@ async def import_shared_chat_from_url(raw_url: str) -> SharedUrlImportResponse:
     if parsed is not None:
         return parsed
 
-    for parser in provider_parsers(detection.platform):
-        result = parser(rendered_html)
-        if result and result.turns:
-            warnings = list(result.warnings or [])
-            if network_warning:
-                warnings.insert(0, network_warning)
-            warnings.insert(0, "Transcript was extracted after browser rendering fallback.")
-            return SharedUrlImportResponse(
-                sourcePlatform=detection.platform,
-                sourceConversationId=extract_conversation_id(detection.normalized_url),
-                turns=result.turns,
-                parserConfidence=result.parser_confidence,
-                parserName=result.parser_name,
-                warnings=warnings,
-            )
-
     raise RuntimeError("Unable to extract transcript turns from the shared page snapshot.")

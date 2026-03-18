@@ -18,11 +18,3 @@ export interface SharedUrlImportResponse {
 export interface SharedUrlImportErrorResponse {
     error: string;
 }
-
-export const SHARED_IMPORT_ENDPOINT_NOTES = [
-    'POST /api/import/fetch-shared',
-    'Request body: { url: string }',
-    'Response body: { sourcePlatform, sourceConversationId?, turns, parserConfidence, parserName, warnings? }',
-    'The server should fetch a public shared-chat snapshot and normalize it into ImportedTurn[].',
-    'The client should never scrape third-party share pages directly.',
-] as const;
