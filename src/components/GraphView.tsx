@@ -377,7 +377,7 @@ export function GraphView() {
 
     return (
         <div className="w-full h-full bg-slate-50 relative">
-            <div className="absolute top-4 left-4 z-10 flex items-center gap-3">
+            <div className="absolute top-4 left-4 right-4 z-10 flex items-center gap-2 flex-wrap">
                 <div className="font-semibold text-slate-700 bg-white px-4 py-2 rounded-lg shadow-sm border border-slate-200">
                     Memory Tree Map
                 </div>

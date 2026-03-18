@@ -791,24 +791,6 @@ export function ChatView() {
                 </div>
                 <div className="flex items-center gap-2">
                     <button
-                        onClick={handleRewindTurn}
-                        disabled={path.length === 0 || isTyping}
-                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                        title="Jump back one turn without deleting history"
-                    >
-                        <Undo2 className="h-3.5 w-3.5" />
-                        <span>Rewind</span>
-                    </button>
-                    <button
-                        onClick={() => void handleCopyBranch()}
-                        disabled={path.length === 0}
-                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                        title="Copy the active branch as markdown"
-                    >
-                        {branchCopied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-                        <span>{branchCopied ? 'Copied' : branchCopyFailed ? 'Failed' : 'Copy Branch'}</span>
-                    </button>
-                    <button
                         onClick={() => setIsInspectorOpen((v) => !v)}
                         className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${
                             isInspectorOpen
@@ -1129,6 +1111,27 @@ export function ChatView() {
                     </div>
                 ) : (
                     <div className="flex flex-col gap-2">
+                        {path.length > 0 && (
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={handleRewindTurn}
+                                    disabled={isTyping}
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                    title="Jump back one turn without deleting history"
+                                >
+                                    <Undo2 className="h-3 w-3" />
+                                    Rewind
+                                </button>
+                                <button
+                                    onClick={() => void handleCopyBranch()}
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                                    title="Copy the active branch as markdown"
+                                >
+                                    {branchCopied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+                                    {branchCopied ? 'Copied' : branchCopyFailed ? 'Failed' : 'Copy Branch'}
+                                </button>
+                            </div>
+                        )}
                         {statusMessage && (
                             <div
                                 className={`rounded-xl border px-3 py-2 text-xs font-medium ${

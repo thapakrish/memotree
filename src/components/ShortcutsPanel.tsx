@@ -1,12 +1,32 @@
 import { Command, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, ChevronDown, Keyboard } from 'lucide-react';
 import { useState } from 'react';
 
+const Kbd = ({ children, wide }: { children: React.ReactNode; wide?: boolean }) => (
+    <kbd className={`inline-flex items-center justify-center h-5 rounded bg-slate-100 border border-slate-200 text-[10px] font-sans font-medium text-slate-500 shadow-sm ${wide ? 'px-1.5' : 'w-5'}`}>
+        {children}
+    </kbd>
+);
+
+const Or = () => <span className="text-slate-300 text-[10px]">or</span>;
+const Plus = () => <span className="text-slate-300 text-[10px] mx-0.5">+</span>;
+
+const Row = ({ label, keys }: { label: string; keys: React.ReactNode }) => (
+    <div className="flex items-center justify-between px-2 py-1.5 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
+        <span className="text-xs">{label}</span>
+        <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
+            {keys}
+        </div>
+    </div>
+);
+
+const Divider = () => <div className="my-1 border-t border-slate-100 w-full" />;
+
 export function ShortcutsPanel() {
     const [isCollapsed, setIsCollapsed] = useState(false);
 
     if (isCollapsed) {
         return (
-            <button 
+            <button
                 onClick={() => setIsCollapsed(false)}
                 className="absolute bottom-6 right-6 z-10 flex items-center justify-center p-3 bg-white/90 backdrop-blur-md rounded-full shadow-lg border border-slate-200/60 hover:bg-slate-50 transition-colors group"
                 title="Show Keyboard Shortcuts"
@@ -20,7 +40,7 @@ export function ShortcutsPanel() {
         <div className="absolute bottom-6 right-6 z-10 w-64 bg-white/90 backdrop-blur-md rounded-xl shadow-lg border border-slate-200/60 overflow-hidden font-sans">
             <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
                 <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wider">Keyboard Shortcuts</h3>
-                <button 
+                <button
                     onClick={() => setIsCollapsed(true)}
                     className="p-1 rounded hover:bg-slate-200/50 text-slate-400 hover:text-slate-600 transition-colors"
                     title="Hide Panel"
@@ -29,101 +49,23 @@ export function ShortcutsPanel() {
                 </button>
             </div>
             <div className="p-2 space-y-0.5">
-                
-                <div className="flex items-center justify-between px-2 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
-                    <span>Undo (Parent)</span>
-                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-50 border border-slate-200/50 text-xs font-mono text-slate-400 shadow-sm opacity-50" title="Optional"><Command className="w-3 h-3" /></kbd>
-                        <span className="text-slate-300 text-[10px] mx-0.5">+</span>
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-100 border border-slate-200 text-xs font-mono text-slate-500 shadow-sm"><ArrowUp className="w-3 h-3" /></kbd>
-                    </div>
-                </div>
 
-                <div className="flex items-center justify-between px-2 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
-                    <span>Redo (Child)</span>
-                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-50 border border-slate-200/50 text-xs font-mono text-slate-400 shadow-sm opacity-50" title="Optional"><Command className="w-3 h-3" /></kbd>
-                        <span className="text-slate-300 text-[10px] mx-0.5">+</span>
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-100 border border-slate-200 text-xs font-mono text-slate-500 shadow-sm"><ArrowDown className="w-3 h-3" /></kbd>
-                    </div>
-                </div>
+                <Row label="Go to Parent" keys={<><Kbd><ArrowUp className="w-3 h-3" /></Kbd><Or /><Kbd wide>P</Kbd></>} />
+                <Row label="Go to Child" keys={<><Kbd><ArrowDown className="w-3 h-3" /></Kbd><Or /><Kbd wide>N</Kbd></>} />
+                <Row label="Prev Branch" keys={<><Kbd><ArrowLeft className="w-3 h-3" /></Kbd><Or /><Kbd wide>B</Kbd></>} />
+                <Row label="Next Branch" keys={<><Kbd><ArrowRight className="w-3 h-3" /></Kbd><Or /><Kbd wide>F</Kbd></>} />
+                <Row label="Go to Root" keys={<><Kbd wide>Shift</Kbd><Plus /><Kbd><ArrowUp className="w-3 h-3" /></Kbd></>} />
 
-                <div className="my-1 border-t border-slate-100 w-full" />
+                <Divider />
 
-                <div className="flex items-center justify-between px-2 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
-                    <span>Prev Branch</span>
-                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-50 border border-slate-200/50 text-xs font-mono text-slate-400 shadow-sm opacity-50" title="Optional"><Command className="w-3 h-3" /></kbd>
-                        <span className="text-slate-300 text-[10px] mx-0.5">+</span>
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-100 border border-slate-200 text-xs font-mono text-slate-500 shadow-sm"><ArrowLeft className="w-3 h-3" /></kbd>
-                    </div>
-                </div>
+                <Row label="Command Palette" keys={<><Kbd><Command className="w-3 h-3" /></Kbd><Kbd wide>K</Kbd></>} />
 
-                <div className="flex items-center justify-between px-2 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
-                    <span>Next Branch</span>
-                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-50 border border-slate-200/50 text-xs font-mono text-slate-400 shadow-sm opacity-50" title="Optional"><Command className="w-3 h-3" /></kbd>
-                        <span className="text-slate-300 text-[10px] mx-0.5">+</span>
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-100 border border-slate-200 text-xs font-mono text-slate-500 shadow-sm"><ArrowRight className="w-3 h-3" /></kbd>
-                    </div>
-                </div>
+                <Divider />
 
-                <div className="my-1 border-t border-slate-100 w-full" />
-
-                <div className="flex items-center justify-between px-2 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
-                    <span>Go to Root</span>
-                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                        <kbd className="flex items-center justify-center h-5 px-1.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-sans font-medium text-slate-500 shadow-sm">Shift</kbd>
-                        <span className="text-slate-300 text-[10px] mx-0.5">+</span>
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-50 border border-slate-200/50 text-xs font-mono text-slate-400 shadow-sm opacity-50" title="Optional"><Command className="w-3 h-3" /></kbd>
-                        <span className="text-slate-300 text-[10px] mx-0.5">+</span>
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-100 border border-slate-200 text-xs font-mono text-slate-500 shadow-sm"><ArrowUp className="w-3 h-3" /></kbd>
-                    </div>
-                </div>
-
-                <div className="flex items-center justify-between px-2 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
-                    <span>Cmd Palette</span>
-                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-100 border border-slate-200 text-xs font-mono text-slate-500 shadow-sm"><Command className="w-3 h-3" /></kbd>
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-100 border border-slate-200 text-[11px] font-sans font-medium text-slate-500 shadow-sm">K</kbd>
-                    </div>
-                </div>
-
-                <div className="my-1 border-t border-slate-100 w-full" />
-
-                <div className="flex items-center justify-between px-2 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
-                    <span>Toggle Select Mode</span>
-                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-100 border border-slate-200 text-[11px] font-sans font-medium text-slate-500 shadow-sm">V</kbd>
-                    </div>
-                </div>
-
-                <div className="flex items-center justify-between px-2 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
-                    <span>Box Select Nodes</span>
-                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-100 border border-slate-200 text-[11px] font-sans font-medium text-slate-500 shadow-sm">V</kbd>
-                        <span className="text-slate-300 text-[10px] mx-0.5">+</span>
-                        <kbd className="flex items-center justify-center h-5 px-1.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-sans font-medium text-slate-500 shadow-sm">Drag</kbd>
-                    </div>
-                </div>
-
-                <div className="flex items-center justify-between px-2 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
-                    <span>Add to Selection</span>
-                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                        <kbd className="flex items-center justify-center h-5 px-1.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-sans font-medium text-slate-500 shadow-sm">Shift</kbd>
-                        <span className="text-slate-300 text-[10px]">or</span>
-                        <kbd className="flex items-center justify-center w-5 h-5 rounded bg-slate-100 border border-slate-200 text-xs font-mono text-slate-500 shadow-sm"><Command className="w-3 h-3" /></kbd>
-                        <span className="text-slate-300 text-[10px] mx-0.5">+</span>
-                        <kbd className="flex items-center justify-center h-5 px-1.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-sans font-medium text-slate-500 shadow-sm">Click</kbd>
-                    </div>
-                </div>
-
-                <div className="flex items-center justify-between px-2 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors group">
-                    <span>Clear Selection</span>
-                    <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                        <kbd className="flex items-center justify-center h-5 px-1.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-sans font-medium text-slate-500 shadow-sm">Esc</kbd>
-                    </div>
-                </div>
+                <Row label="Toggle Select Mode" keys={<Kbd wide>V</Kbd>} />
+                <Row label="Box Select" keys={<><Kbd wide>V</Kbd><Plus /><Kbd wide>Drag</Kbd></>} />
+                <Row label="Add to Selection" keys={<><Kbd wide>Shift</Kbd><Or /><Kbd><Command className="w-3 h-3" /></Kbd><Plus /><Kbd wide>Click</Kbd></>} />
+                <Row label="Clear Selection" keys={<Kbd wide>Esc</Kbd>} />
 
             </div>
         </div>

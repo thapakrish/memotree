@@ -86,7 +86,7 @@ function App() {
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-900 font-sans">
       {/* Pane A: Chat View (Fixed Width Sidebar) */}
-      <div className="w-[450px] min-w-[350px] max-w-[600px] h-full z-10 shadow-xl">
+      <div className="w-[450px] min-w-[350px] max-w-[600px] h-full overflow-hidden shrink-0 shadow-xl" style={{ zIndex: 10 }}>
         <ChatView />
       </div>
 
