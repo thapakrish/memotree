@@ -155,6 +155,8 @@ export function CustomNode({ data }: CustomNodeProps) {
                                     ? 'bg-emerald-50 text-emerald-700'
                                     : badge === 'tool'
                                         ? 'bg-sky-50 text-sky-700'
+                                        : badge === 'image'
+                                            ? 'bg-violet-50 text-violet-700'
                                         : badge === 'merge'
                                             ? 'bg-fuchsia-50 text-fuchsia-700'
                                         : badge === 'inferred'

@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Loader2, RefreshCw, ChevronDown, ChevronRight, Database, MessageSquare, Paperclip, Layers, Lock, Zap, Scissors, X, AlertTriangle } from 'lucide-react';
-import type { AttachmentPart, CompactionBlock, ImportedConversationEnvelope, MessageNode } from '../store/types';
+import type { AssistantResponseMode, AttachmentPart, CompactionBlock, ImportedConversationEnvelope, MessageNode } from '../store/types';
 import type { IProvider } from '../lib/providers';
+import { getImageArtifacts } from '../lib/chatEvents';
 import { reconstructMemory } from '../lib/memoryEngine';
 
 const COMPACT_WARNING_TOKENS = 80_000;
@@ -10,6 +11,12 @@ const COMPACT_DANGER_TOKENS = 300_000;
 // Rough token estimate: ~4 chars per token
 function roughTokens(text: string): number {
     return Math.ceil(text.length / 4);
+}
+
+function estimateImageTokens(base64: string): number {
+    const rawBytes = base64.length * 0.75;
+    const estimatedTiles = Math.ceil(rawBytes / (768 * 768 * 3));
+    return Math.max(258, estimatedTiles * 258);
 }
 
 function formatTokens(n: number): string {
@@ -47,6 +54,7 @@ interface ContextInspectorProps {
     path: MessageNode[];
     pendingInput: string;
     pendingAttachments: AttachmentPart[];
+    responseMode?: AssistantResponseMode;
     provider: IProvider | null;
     importEnvelope?: ImportedConversationEnvelope;
     compactions: Record<string, CompactionBlock>;
@@ -62,6 +70,7 @@ export function ContextInspector({
     path,
     pendingInput,
     pendingAttachments,
+    responseMode = 'text',
     provider,
     importEnvelope,
     compactions,
@@ -78,14 +87,16 @@ export function ContextInspector({
     const [memoryExpanded, setMemoryExpanded] = useState(false);
 
     const memoryState = reconstructMemory(path);
-    const providerEstimate = provider?.estimateContext(memoryState, pendingAttachments);
+    const providerEstimate = provider?.estimateContext(memoryState, pendingAttachments, { responseMode });
 
     // Rough estimates
     const cacheableTokens = providerEstimate?.cacheableTokens ?? 0;
     const conversationTokens = path.reduce((sum, node) => {
         const textLen = node.content.length + (node.events ?? []).reduce((s, e) =>
             s + ('text' in e ? e.text.length : 0), 0);
-        return sum + roughTokens('x'.repeat(textLen));
+        const priorArtifactTokens = getImageArtifacts(node.events).reduce((artifactSum, artifact) =>
+            artifactSum + estimateImageTokens(artifact.data), 0);
+        return sum + roughTokens('x'.repeat(textLen)) + priorArtifactTokens;
     }, 0);
     const pendingInputTokens = pendingInput.trim() ? roughTokens(pendingInput.trim()) : 0;
     const attachmentTokenEstimate = providerEstimate?.attachmentTokens ?? 0;
@@ -95,13 +106,14 @@ export function ContextInspector({
     const assistantNodes = path.filter((n) => n.role === 'assistant').length;
     const totalPatches = path.reduce((sum, n) => sum + (n.memoryPatches?.length ?? 0), 0);
     const totalAttachmentsInPath = path.reduce((sum, n) => sum + (n.attachments?.length ?? 0), 0);
+    const totalGeneratedImagesInPath = path.reduce((sum, n) => sum + getImageArtifacts(n.events).length, 0);
 
     const handleCountExact = async () => {
         if (!provider) return;
         setIsCounting(true);
         setCountError(null);
         try {
-            const total = await provider.countTokens(path, memoryState, compactions, pendingInput, pendingAttachments);
+            const total = await provider.countTokens(path, memoryState, compactions, pendingInput, pendingAttachments, { responseMode });
             setExactTokens(total);
         } catch (err) {
             setCountError(err instanceof Error ? err.message : 'Count failed');
@@ -204,16 +216,20 @@ export function ContextInspector({
                         <span>Pending draft: <span className="font-medium text-slate-800">{formatTokens(pendingInputTokens)}</span></span>
                     </div>
                 )}
-                {(pendingAttachments.length > 0 || totalAttachmentsInPath > 0) && (
+                {(pendingAttachments.length > 0 || totalAttachmentsInPath > 0 || totalGeneratedImagesInPath > 0) && (
                     <div className="flex items-center gap-1.5 text-slate-600 col-span-2">
                         <Paperclip className="h-3 w-3 shrink-0 text-violet-500" />
                         <span>
                             {pendingAttachments.length > 0 && (
                                 <><span className="font-medium text-slate-800">{pendingAttachments.length}</span> pending image{pendingAttachments.length !== 1 ? 's' : ''}</>
                             )}
-                            {pendingAttachments.length > 0 && totalAttachmentsInPath > 0 && ', '}
+                            {pendingAttachments.length > 0 && (totalAttachmentsInPath > 0 || totalGeneratedImagesInPath > 0) && ', '}
                             {totalAttachmentsInPath > 0 && (
                                 <><span className="font-medium text-slate-800">{totalAttachmentsInPath}</span> in path</>
+                            )}
+                            {totalAttachmentsInPath > 0 && totalGeneratedImagesInPath > 0 && ', '}
+                            {totalGeneratedImagesInPath > 0 && (
+                                <><span className="font-medium text-slate-800">{totalGeneratedImagesInPath}</span> generated in path</>
                             )}
                         </span>
                     </div>

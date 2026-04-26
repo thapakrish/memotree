@@ -4,17 +4,21 @@ import {
     type FunctionCall,
     type FunctionDeclaration,
     type GenerateContentResponse,
+    Modality,
     type Part,
     createModelContent,
     createPartFromFunctionResponse,
     createUserContent,
 } from '@google/genai';
 import type { AttachmentPart, ChatEvent, CompactionBlock, MessageNode, MemoryPatch } from '../store/types';
+import type { ProviderRequestConfig } from './providers/types';
 import { computePatch, validateEaseMemory } from './memoryEngine';
-import { getFinalAnswerText } from './chatEvents';
+import { getFinalAnswerText, getImageArtifacts } from './chatEvents';
 
 let geminiClient: GoogleGenAI | null = null;
 let activeApiKey: string | null = null;
+const TEXT_RESPONSE_MODEL = 'gemini-2.5-flash';
+const IMAGE_RESPONSE_MODEL = 'gemini-2.5-flash-image';
 
 export const initGemini = (apiKey: string) => {
     if (!geminiClient || activeApiKey !== apiKey) {
@@ -58,6 +62,25 @@ export const TEXT_EDITOR_TOOL: FunctionDeclaration = {
     },
 };
 
+function isImageResponseMode(requestConfig?: ProviderRequestConfig): boolean {
+    return requestConfig?.responseMode === 'image' || requestConfig?.responseMode === 'multimodal';
+}
+
+function getResponseModalities(requestConfig?: ProviderRequestConfig): Modality[] | undefined {
+    switch (requestConfig?.responseMode) {
+        case 'image':
+            return [Modality.IMAGE];
+        case 'multimodal':
+            return [Modality.TEXT, Modality.IMAGE];
+        default:
+            return undefined;
+    }
+}
+
+export function getGeminiModelForRequest(requestConfig?: ProviderRequestConfig): string {
+    return isImageResponseMode(requestConfig) ? IMAGE_RESPONSE_MODEL : TEXT_RESPONSE_MODEL;
+}
+
 export function interceptMemoryTool(
     toolArgs: Record<string, string>,
     currentMemoryState: string,
@@ -85,31 +108,57 @@ export function interceptMemoryTool(
 }
 
 export function extractAssistantEvents(response: GenerateContentResponse): ChatEvent[] {
-    const parts = response.candidates?.[0]?.content?.parts ?? [];
-    return parts.reduce<ChatEvent[]>((acc, part) => {
-        if (part.text) {
-            acc.push(
-                part.thought
-                    ? {
-                        kind: 'thought',
-                        text: part.text,
-                        signature: part.thoughtSignature,
-                        tokenCount: response.usageMetadata?.thoughtsTokenCount,
-                    }
-                    : {
-                        kind: 'text',
-                        text: part.text,
-                    },
-            );
+    const candidates = response.candidates ?? [];
+    let imageOrdinal = 0;
+
+    return candidates.reduce<ChatEvent[]>((acc, candidate, candidateIndex) => {
+        const parts = candidate.content?.parts ?? [];
+        const imageParts = parts.filter((part) => part.inlineData?.data && part.inlineData.mimeType?.startsWith('image/'));
+
+        if ((candidate.index ?? candidateIndex) === 0) {
+            for (const part of parts) {
+                if (part.text) {
+                    acc.push(
+                        part.thought
+                            ? {
+                                kind: 'thought',
+                                text: part.text,
+                                signature: part.thoughtSignature,
+                                tokenCount: response.usageMetadata?.thoughtsTokenCount,
+                            }
+                            : {
+                                kind: 'text',
+                                text: part.text,
+                            },
+                    );
+                }
+                if (part.functionCall?.name) {
+                    acc.push({
+                        kind: 'tool_call',
+                        toolName: part.functionCall.name,
+                        callId: part.functionCall.id,
+                        args: part.functionCall.args ?? {},
+                    });
+                }
+            }
         }
-        if (part.functionCall?.name) {
+
+        imageParts.forEach((part) => {
+            imageOrdinal += 1;
             acc.push({
-                kind: 'tool_call',
-                toolName: part.functionCall.name,
-                callId: part.functionCall.id,
-                args: part.functionCall.args ?? {},
+                kind: 'image_artifact',
+                artifact: {
+                    id: crypto.randomUUID(),
+                    mimeType: part.inlineData!.mimeType as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif',
+                    data: part.inlineData!.data!,
+                    model: response.modelVersion,
+                    label: candidates.length > 1 || imageParts.length > 1
+                        ? `Generated image ${imageOrdinal}`
+                        : undefined,
+                },
             });
-        }
+        });
+
         return acc;
     }, []);
 }
@@ -161,6 +210,13 @@ function toModelParts(node: MessageNode): Part[] {
                     }];
                 case 'tool_result':
                     return [];
+                case 'image_artifact':
+                    return [{
+                        inlineData: {
+                            mimeType: event.artifact.mimeType,
+                            data: event.artifact.data,
+                        },
+                    }];
             }
             }),
         ];
@@ -274,6 +330,7 @@ export async function compactPathNodes(
             const toolResults = (n.events ?? [])
                 .filter((event) => event.kind === 'tool_result')
                 .map((event) => `${event.summary}${event.payload !== undefined ? ` | payload: ${JSON.stringify(event.payload)}` : ''}`);
+            const imageArtifacts = getImageArtifacts(n.events ?? []);
             const finalText = getFinalAnswerText(n.events ?? []) || n.content;
 
             if (thoughts.length > 0) {
@@ -284,6 +341,9 @@ export async function compactPathNodes(
             }
             if (toolResults.length > 0) {
                 segments.push(`Tool results: ${toolResults.join(' ; ')}`);
+            }
+            if (imageArtifacts.length > 0) {
+                segments.push(`Generated images: ${imageArtifacts.length}`);
             }
             if (finalText.trim()) {
                 segments.push(`Reply: ${finalText}`);
@@ -305,7 +365,7 @@ export async function compactPathNodes(
     }).join('\n\n');
 
     const response = await client.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: TEXT_RESPONSE_MODEL,
         contents: createUserContent([{
             text: `Summarize this conversation segment concisely for context compaction. Preserve all important facts, decisions, attachments, tool calls, tool results, memory updates, and context needed to continue the conversation naturally. Write in past tense. Omit pleasantries, but do not omit technical or factual details that later turns may rely on.\n\n${transcript}`,
         }]),
@@ -315,9 +375,11 @@ export async function compactPathNodes(
     return response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
 }
 
-export function buildSystemInstruction(memoryState: string): string {
+export function buildSystemInstruction(memoryState: string, requestConfig?: ProviderRequestConfig): string {
     return `You are MemoTree AI.
-You have access to a text_editor tool to save long-term facts in /memories/.
+${isImageResponseMode(requestConfig)
+        ? 'This turn may generate or edit images. Use the active branch context and any attached images precisely.'
+        : 'You have access to a text_editor tool to save long-term facts in /memories/.'}
 <memory_files>
 /memories/facts.json:
 ${memoryState}
@@ -325,15 +387,23 @@ ${memoryState}
 CRITICAL: EASE Protocol active. No JSON arrays allowed in memory files. Use key-value only.`;
 }
 
-function getGenerationConfig(memoryState: string) {
+function getGenerationConfig(memoryState: string, requestConfig?: ProviderRequestConfig) {
+    const isImageTurn = isImageResponseMode(requestConfig);
+    const responseModalities = getResponseModalities(requestConfig);
+
     return {
-        systemInstruction: buildSystemInstruction(memoryState),
-        tools: [{
-            functionDeclarations: [TEXT_EDITOR_TOOL],
-        }],
-        thinkingConfig: {
-            includeThoughts: true,
-        },
+        systemInstruction: buildSystemInstruction(memoryState, requestConfig),
+        ...(isImageTurn ? {} : {
+            tools: [{
+                functionDeclarations: [TEXT_EDITOR_TOOL],
+            }],
+        }),
+        ...(!isImageTurn ? {
+            thinkingConfig: {
+                includeThoughts: true,
+            },
+        } : {}),
+        ...(responseModalities ? { responseModalities } : {}),
     };
 }
 
@@ -344,18 +414,16 @@ export async function countTokens(
     compactions?: Record<string, CompactionBlock>,
     pendingText?: string,
     pendingAttachments?: AttachmentPart[],
+    requestConfig?: ProviderRequestConfig,
 ): Promise<number> {
     const client = initGemini(apiKey);
     const response = await client.models.countTokens({
-        model: 'gemini-2.5-flash',
+        model: getGeminiModelForRequest(requestConfig),
         contents: [
             ...buildGeminiContentsWithCompaction(chatPath, compactions ?? {}),
             ...buildPendingDraftContent(pendingText, pendingAttachments),
         ],
-        config: {
-            systemInstruction: buildSystemInstruction(memoryState),
-            tools: [{ functionDeclarations: [TEXT_EDITOR_TOOL] }],
-        },
+        config: getGenerationConfig(memoryState, requestConfig),
     });
     return response.totalTokens ?? 0;
 }
@@ -393,13 +461,14 @@ export async function generateGeminiResponseStreamFromContents(
     memoryState: string,
     apiKey: string,
     signal?: AbortSignal,
+    requestConfig?: ProviderRequestConfig,
 ) {
     const client = initGemini(apiKey);
 
     const stream = await client.models.generateContentStream({
-        model: 'gemini-2.5-flash',
+        model: getGeminiModelForRequest(requestConfig),
         contents,
-        config: getGenerationConfig(memoryState),
+        config: getGenerationConfig(memoryState, requestConfig),
     });
 
     if (signal) {
@@ -415,12 +484,14 @@ export async function generateGeminiResponseStream(
     apiKey: string,
     signal?: AbortSignal,
     compactions?: Record<string, CompactionBlock>,
+    requestConfig?: ProviderRequestConfig,
 ) {
     return generateGeminiResponseStreamFromContents(
         buildGeminiContentsWithCompaction(chatPath, compactions ?? {}),
         memoryState,
         apiKey,
         signal,
+        requestConfig,
     );
 }
 
@@ -442,6 +513,13 @@ export function createModelToolCallContent(
                 case 'tool_call':
                 case 'tool_result':
                     return [];
+                case 'image_artifact':
+                    return [{
+                        inlineData: {
+                            mimeType: event.artifact.mimeType,
+                            data: event.artifact.data,
+                        },
+                    }];
             }
         }),
         ...functionCalls.map((call) => ({

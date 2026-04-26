@@ -1,4 +1,4 @@
-export type { IProvider, ProviderCapabilities, ProviderContextEstimate, ProviderFunctionCall, ProviderFunctionResponse, StreamDelta } from './types';
+export type { IProvider, ProviderCapabilities, ProviderContextEstimate, ProviderFunctionCall, ProviderFunctionResponse, ProviderRequestConfig, StreamDelta } from './types';
 export { createGeminiProvider } from './gemini';
 
 import type { IProvider } from './types';

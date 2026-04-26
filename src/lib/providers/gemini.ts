@@ -51,6 +51,7 @@ async function* normalizeStream(
 
 const GEMINI_CAPABILITIES: ProviderCapabilities = {
     supportsImages: true,
+    supportsImageOutput: true,
     supportsFileAttachments: true,
     supportsCaching: true,
     supportsThinking: true,
@@ -74,14 +75,14 @@ export function createGeminiProvider(apiKey: string): IProvider {
         id: 'gemini',
         capabilities: GEMINI_CAPABILITIES,
 
-        async *stream(path, memoryState, compactions, signal) {
+        async *stream(path, memoryState, compactions, signal, requestConfig) {
             const rawStream = await generateGeminiResponseStream(
-                path, memoryState, apiKey, signal, compactions,
+                path, memoryState, apiKey, signal, compactions, requestConfig,
             );
             yield* normalizeStream(rawStream);
         },
 
-        async *continueWithToolResults(path, compactions, priorEvents, priorFunctionCalls, functionResponses, memoryState, signal) {
+        async *continueWithToolResults(path, compactions, priorEvents, priorFunctionCalls, functionResponses, memoryState, signal, requestConfig) {
             const baseContents = buildGeminiContentsWithCompaction(path, compactions);
             const followUpContents = [
                 ...baseContents,
@@ -89,22 +90,22 @@ export function createGeminiProvider(apiKey: string): IProvider {
                 createFunctionResponseContent(functionResponses),
             ];
             const rawStream = await generateGeminiResponseStreamFromContents(
-                followUpContents, memoryState, apiKey, signal,
+                followUpContents, memoryState, apiKey, signal, requestConfig,
             );
             yield* normalizeStream(rawStream);
         },
 
-        async countTokens(path, memoryState, compactions, pendingText, pendingAttachments) {
-            return geminiCountTokens(path, memoryState, apiKey, compactions, pendingText, pendingAttachments);
+        async countTokens(path, memoryState, compactions, pendingText, pendingAttachments, requestConfig) {
+            return geminiCountTokens(path, memoryState, apiKey, compactions, pendingText, pendingAttachments, requestConfig);
         },
 
         async compactNodes(nodes) {
             return compactPathNodes(nodes, apiKey);
         },
 
-        estimateContext(memoryState, pendingAttachments): ProviderContextEstimate {
+        estimateContext(memoryState, pendingAttachments, requestConfig): ProviderContextEstimate {
             return {
-                cacheableTokens: roughTokens(buildSystemInstruction(memoryState)),
+                cacheableTokens: roughTokens(buildSystemInstruction(memoryState, requestConfig)),
                 attachmentTokens: estimateGeminiAttachmentTokens(pendingAttachments),
             };
         },

@@ -1,7 +1,8 @@
-import type { AttachmentPart, ChatEvent, CompactionBlock, MessageNode } from '../../store/types';
+import type { AttachmentPart, AssistantResponseMode, ChatEvent, CompactionBlock, MessageNode } from '../../store/types';
 
 export interface ProviderCapabilities {
     supportsImages: boolean;
+    supportsImageOutput: boolean;
     supportsFileAttachments: boolean;
     supportsCaching: boolean;
     supportsThinking: boolean;
@@ -23,6 +24,10 @@ export interface ProviderFunctionResponse {
     id?: string;
     name: string;
     response: Record<string, unknown>;
+}
+
+export interface ProviderRequestConfig {
+    responseMode?: AssistantResponseMode;
 }
 
 /**
@@ -47,6 +52,7 @@ export interface IProvider {
         memoryState: string,
         compactions: Record<string, CompactionBlock>,
         signal?: AbortSignal,
+        requestConfig?: ProviderRequestConfig,
     ): AsyncGenerator<StreamDelta>;
 
     /**
@@ -62,6 +68,7 @@ export interface IProvider {
         functionResponses: ProviderFunctionResponse[],
         memoryState: string,
         signal?: AbortSignal,
+        requestConfig?: ProviderRequestConfig,
     ): AsyncGenerator<StreamDelta>;
 
     countTokens(
@@ -70,8 +77,9 @@ export interface IProvider {
         compactions: Record<string, CompactionBlock>,
         pendingText?: string,
         pendingAttachments?: AttachmentPart[],
+        requestConfig?: ProviderRequestConfig,
     ): Promise<number>;
 
     compactNodes(nodes: MessageNode[]): Promise<string>;
-    estimateContext(memoryState: string, pendingAttachments?: AttachmentPart[]): ProviderContextEstimate;
+    estimateContext(memoryState: string, pendingAttachments?: AttachmentPart[], requestConfig?: ProviderRequestConfig): ProviderContextEstimate;
 }

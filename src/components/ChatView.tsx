@@ -1,17 +1,18 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, FileText, Music, ScanText, ArrowRight, Sparkles, RotateCcw, Pencil } from 'lucide-react';
 import { useGraphStore } from '../store/useGraphStore';
-import type { AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, MessageNode } from '../store/types';
+import type { AssistantResponseMode, AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, ImageArtifact, MessageNode } from '../store/types';
 import { getAssistantText, interceptMemoryTool } from '../lib/geminiEngine';
 import type { IProvider, ProviderFunctionCall, StreamDelta } from '../lib/providers';
 import { createProvider } from '../lib/providers';
-import { appendEvent, getFinalAnswerText, getNodeSummary, mergeEvents } from '../lib/chatEvents';
+import { appendEvent, getFinalAnswerText, getImageArtifacts, getNodeSummary, mergeEvents } from '../lib/chatEvents';
 import { reconstructMemory } from '../lib/memoryEngine';
 import { SessionsModal } from './SessionsModal';
 import { ImportSuggestionsModal } from './ImportSuggestionsModal';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ContextInspector } from './ContextInspector';
 import { featureFlags, isImageOnlyAttachmentMode } from '../config/featureFlags';
+import logoMark from '../assets/logo-mark.svg';
 
 function getTextSummary(text: string): string {
     return text.length > 40 ? `${text.slice(0, 40)}...` : text;
@@ -19,6 +20,12 @@ function getTextSummary(text: string): string {
 
 function roughTokens(text: string): number {
     return Math.ceil(text.length / 4);
+}
+
+function estimateImageTokens(base64: string): number {
+    const rawBytes = base64.length * 0.75;
+    const estimatedTiles = Math.ceil(rawBytes / (768 * 768 * 3));
+    return Math.max(258, estimatedTiles * 258);
 }
 
 function formatBytes(bytes?: number): string {
@@ -34,6 +41,18 @@ function describeAttachment(attachment: AttachmentPart): string {
     return size ? `${label} (${attachment.mimeType}, ${size})` : `${label} (${attachment.mimeType})`;
 }
 
+function createAttachmentFromArtifact(artifact: ImageArtifact): AttachmentPart {
+    return {
+        id: crypto.randomUUID(),
+        kind: 'image',
+        mimeType: artifact.mimeType,
+        data: artifact.data,
+        name: artifact.label ?? `generated-${artifact.id.slice(0, 8)}.${artifact.mimeType.split('/')[1] ?? 'png'}`,
+        sizeBytes: Math.floor(artifact.data.length * 0.75),
+        sourceType: 'generated',
+    };
+}
+
 function buildBranchMarkdown(path: MessageNode[]): string {
     return path.map((node) => {
         const title = node.role === 'user'
@@ -45,11 +64,19 @@ function buildBranchMarkdown(path: MessageNode[]): string {
             ? (getFinalAnswerText(node.events ?? []) || node.content).trim()
             : node.content.trim();
         const attachmentLines = (node.attachments ?? []).map((attachment) => `- ${describeAttachment(attachment)}`);
+        const generatedImages = getImageArtifacts(node.events).map((artifact, index) =>
+            `- ${artifact.label ?? `Generated image ${index + 1}`} (${artifact.mimeType})`,
+        );
         const sections = [`## ${title}`];
 
         if (attachmentLines.length > 0) {
             sections.push('Attachments:');
             sections.push(...attachmentLines);
+        }
+
+        if (generatedImages.length > 0) {
+            sections.push('Generated images:');
+            sections.push(...generatedImages);
         }
 
         if (body) {
@@ -73,6 +100,31 @@ function normalizeToolArgs(args: unknown): Record<string, string> {
     }
 
     return normalized;
+}
+
+function unwrapJsonErrorMessage(message: string): string | null {
+    try {
+        const parsed = JSON.parse(message) as {
+            error?: { message?: string; status?: string };
+            message?: string;
+            status?: string;
+        };
+        const nested = parsed.error?.message ?? parsed.message;
+        if (typeof nested === 'string' && nested !== message) {
+            return unwrapJsonErrorMessage(nested) ?? nested;
+        }
+        return parsed.error?.status ?? parsed.status ?? null;
+    } catch {
+        return null;
+    }
+}
+
+function getFriendlyErrorMessage(error: unknown): string {
+    if (!(error instanceof Error)) {
+        return 'Request failed. Check your API key or console.';
+    }
+
+    return unwrapJsonErrorMessage(error.message) ?? error.message;
 }
 
 const SUPPORTED_IMAGE_TYPES: AttachmentMimeType[] = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
@@ -227,6 +279,11 @@ function cloneAttachments(parts: AttachmentPart[]): AttachmentPart[] {
 }
 
 const MAX_TOOL_ROUNDS = 2;
+const RESPONSE_MODE_OPTIONS: Array<{ value: AssistantResponseMode; label: string }> = [
+    { value: 'text', label: 'Text' },
+    { value: 'image', label: 'Image' },
+    { value: 'multimodal', label: 'Mixed' },
+];
 
 async function collectProviderStream(
     stream: AsyncGenerator<StreamDelta>,
@@ -279,10 +336,12 @@ function AssistantMessageBody({
     events,
     fallbackText,
     isStreaming,
+    onUseImageArtifact,
 }: {
     events?: ChatEvent[];
     fallbackText: string;
     isStreaming?: boolean;
+    onUseImageArtifact?: (artifact: ImageArtifact) => void;
 }) {
     const messageEvents = events ?? [];
 
@@ -353,6 +412,36 @@ function AssistantMessageBody({
                                 isStreaming={isStreaming && index === lastTextIndex}
                             />
                         );
+                    case 'image_artifact':
+                        return (
+                            <div key={`${event.kind}-${event.artifact.id}`} className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                                <img
+                                    src={`data:${event.artifact.mimeType};base64,${event.artifact.data}`}
+                                    alt={event.artifact.label ?? 'generated image'}
+                                    className="max-h-[28rem] w-full object-contain bg-white"
+                                />
+                                <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-3 py-2">
+                                    <div className="min-w-0">
+                                        <div className="truncate text-[11px] font-medium text-slate-700">
+                                            {event.artifact.label ?? 'Generated image'}
+                                        </div>
+                                        <div className="truncate text-[10px] text-slate-400">
+                                            {event.artifact.model ?? event.artifact.mimeType}
+                                        </div>
+                                    </div>
+                                    {onUseImageArtifact && (
+                                        <button
+                                            onClick={() => onUseImageArtifact(event.artifact)}
+                                            className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700"
+                                            title="Add this image to the composer"
+                                        >
+                                            <ImageIcon className="h-3 w-3" />
+                                            Use as input
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        );
                 }
             })}
         </div>
@@ -385,6 +474,7 @@ export function ChatView() {
     const [isSessionsOpen, setIsSessionsOpen] = useState(false);
     const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
     const [attachments, setAttachments] = useState<AttachmentPart[]>([]);
+    const [responseMode, setResponseMode] = useState<AssistantResponseMode>('text');
     const [isDraggingOver, setIsDraggingOver] = useState(false);
     const [isInspectorOpen, setIsInspectorOpen] = useState(false);
     const [isCompacting, setIsCompacting] = useState(false);
@@ -411,6 +501,11 @@ export function ChatView() {
 
     const removeAttachment = (id: string) => {
         setAttachments((prev) => prev.filter((a) => a.id !== id));
+    };
+
+    const handleReuseArtifact = (artifact: ImageArtifact) => {
+        addAttachments([createAttachmentFromArtifact(artifact)]);
+        showStatus('info', 'Generated image added to the composer.');
     };
 
     const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -488,11 +583,13 @@ export function ChatView() {
             return null;
         }
 
-        const providerEstimate = provider.estimateContext(draftMemoryState, attachments);
+        const providerEstimate = provider.estimateContext(draftMemoryState, attachments, { responseMode });
         const conversationTokens = path.reduce((sum, node) => {
             const eventTextLength = (node.events ?? []).reduce((eventSum, event) =>
                 eventSum + ('text' in event ? event.text.length : 0), 0);
-            return sum + roughTokens(node.content) + Math.ceil(eventTextLength / 4);
+            const priorArtifactTokens = getImageArtifacts(node.events).reduce((artifactSum, artifact) =>
+                artifactSum + estimateImageTokens(artifact.data), 0);
+            return sum + roughTokens(node.content) + Math.ceil(eventTextLength / 4) + priorArtifactTokens;
         }, 0);
         const draftTokens = input.trim() ? roughTokens(input.trim()) : 0;
 
@@ -500,7 +597,7 @@ export function ChatView() {
             + providerEstimate.attachmentTokens
             + conversationTokens
             + draftTokens;
-    }, [attachments, draftMemoryState, input, path, provider]);
+    }, [attachments, draftMemoryState, input, path, provider, responseMode]);
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -587,8 +684,10 @@ export function ChatView() {
         try {
             const newPath = getPath(userNodeId);
             const memoryState = reconstructMemory(newPath);
+            const lastNode = newPath[newPath.length - 1];
+            const requestedResponseMode = lastNode?.responseMode ?? 'text';
             const initialDelta = await collectProviderStream(
-                provider.stream(newPath, memoryState, compactions, controller.signal),
+                provider.stream(newPath, memoryState, compactions, controller.signal, { responseMode: requestedResponseMode }),
                 setStreamingEvents,
                 setThoughtsTokenCount,
             );
@@ -666,7 +765,7 @@ export function ChatView() {
                 const followUpDelta = await collectProviderStream(
                     provider.continueWithToolResults(
                         newPath, compactions, events, pendingFunctionCalls,
-                        functionResponses, nextMemoryState, controller.signal,
+                        functionResponses, nextMemoryState, controller.signal, { responseMode: requestedResponseMode },
                     ),
                     setStreamingEvents,
                     setThoughtsTokenCount,
@@ -693,10 +792,11 @@ export function ChatView() {
 
             // Only save node if we got something (even if aborted mid-stream)
             if (events.length > 0) {
-                const assistantText = getAssistantText(events) || 'Tool ran with no user-facing answer';
+                const assistantText = getAssistantText(events) || getNodeSummary({ role: 'assistant', events, content: '' });
                 addNode({
                     parentId: userNodeId,
                     role: 'assistant',
+                    responseMode: requestedResponseMode,
                     content: assistantText,
                     events,
                     memoryPatches: patches,
@@ -705,7 +805,7 @@ export function ChatView() {
             }
         } catch (err) {
             console.error(err);
-            showStatus('error', err instanceof Error ? err.message : 'Request failed. Check your API key or console.');
+            showStatus('error', getFriendlyErrorMessage(err));
         } finally {
             setIsTyping(false);
             setStreamingEvents([]);
@@ -726,9 +826,10 @@ export function ChatView() {
             parentId,
             role: 'user',
             content: nextInput,
+            responseMode,
             attachments: nextAttachments.length > 0 ? nextAttachments : undefined,
             memoryPatches: [],
-            summary: getTextSummary(nextInput),
+            summary: nextInput.trim() ? getTextSummary(nextInput) : `Image request (${responseMode})`,
         });
 
         setInput('');
@@ -745,6 +846,7 @@ export function ChatView() {
     const handleEditAndResend = (userNode: MessageNode) => {
         setActiveNode(userNode.parentId);
         setInput(userNode.content);
+        setResponseMode(userNode.responseMode ?? 'text');
         setAttachments(cloneAttachments(userNode.attachments ?? []));
         requestAnimationFrame(() => textareaRef.current?.focus());
     };
@@ -789,30 +891,33 @@ export function ChatView() {
 
     return (
         <div className="w-full h-full flex flex-col bg-white border-r border-slate-200 shadow-sm z-20">
-            <div className="h-16 flex items-center justify-between px-6 border-b border-slate-100 bg-white shadow-sm shrink-0">
-                <div>
-                    <h1 className="text-xl font-bold tracking-tight text-slate-800">MemoTree</h1>
-                    <p className="text-xs font-medium text-slate-400">Time-Traveling LLM Interface</p>
+            <div className="flex h-14 items-center justify-between border-b border-slate-100 bg-white px-4 shadow-sm shrink-0 sm:h-16 sm:px-6">
+                <div className="flex items-center gap-3">
+                    <img src={logoMark} alt="MemoTree" className="h-7 w-7 shrink-0" />
+                    <div>
+                        <h1 className="text-xl font-bold tracking-tight text-slate-800">MemoTree</h1>
+                        <p className="text-xs font-medium text-slate-400">Time-Traveling LLM Interface</p>
+                    </div>
                 </div>
                 <div className="flex items-center gap-2">
                     <button
                         onClick={() => setIsInspectorOpen((v) => !v)}
-                        className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${
+                        className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-2 text-xs font-semibold transition-colors sm:gap-2 sm:px-3 ${
                             isInspectorOpen
                                 ? 'border-blue-300 bg-blue-50 text-blue-700'
                                 : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700'
                         }`}
                         title="Toggle context inspector"
                     >
-                        <ScanText className="h-3.5 w-3.5" />
-                        <span>Context</span>
+                        <ScanText className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                        <span className="hidden sm:inline">Context</span>
                     </button>
                     <button
                         onClick={() => setIsSessionsOpen(true)}
-                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 sm:gap-2 sm:px-3"
                     >
-                        <FolderOpen className="h-3.5 w-3.5" />
-                        <span>Sessions</span>
+                        <FolderOpen className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                        <span className="hidden sm:inline">Sessions</span>
                     </button>
                 </div>
             </div>
@@ -821,6 +926,7 @@ export function ChatView() {
                     path={path}
                     pendingInput={input}
                     pendingAttachments={attachments}
+                    responseMode={responseMode}
                     provider={provider}
                     importEnvelope={visibleImportEnvelope ?? undefined}
                     compactions={compactions}
@@ -995,6 +1101,7 @@ export function ChatView() {
                                     <AssistantMessageBody
                                         events={msg.events}
                                         fallbackText={msg.content}
+                                        onUseImageArtifact={handleReuseArtifact}
                                     />
                                 ) : (
                                     <div>
@@ -1090,6 +1197,7 @@ export function ChatView() {
                                     events={streamingDisplayEvents}
                                     fallbackText={getFinalAnswerText(streamingDisplayEvents)}
                                     isStreaming
+                                    onUseImageArtifact={handleReuseArtifact}
                                 />
                             ) : (
                                 <div className="flex items-center gap-2 text-slate-400 h-6">
@@ -1102,7 +1210,7 @@ export function ChatView() {
             </div>
 
             <div
-                className={`p-4 bg-white border-t border-slate-100 shrink-0 transition-colors ${isDraggingOver ? 'bg-blue-50 border-blue-300' : ''}`}
+                className={`bg-white border-t border-slate-100 shrink-0 transition-colors p-3 sm:p-4 pb-safe ${isDraggingOver ? 'bg-blue-50 border-blue-300' : ''}`}
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
@@ -1199,6 +1307,31 @@ export function ChatView() {
                             </div>
                         )}
 
+                        {provider?.capabilities.supportsImageOutput && (
+                            <div className="flex flex-wrap items-center gap-2">
+                                {RESPONSE_MODE_OPTIONS.map((option) => (
+                                    <button
+                                        key={option.value}
+                                        onClick={() => setResponseMode(option.value)}
+                                        disabled={isTyping}
+                                        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                                            responseMode === option.value
+                                                ? 'border-blue-300 bg-blue-50 text-blue-700'
+                                                : 'border-slate-200 bg-white text-slate-500 hover:border-blue-300 hover:text-blue-700'
+                                        } disabled:cursor-not-allowed disabled:opacity-50`}
+                                        title={`Request a ${option.label.toLowerCase()} response`}
+                                    >
+                                        {option.value === 'text'
+                                            ? <ScanText className="h-3.5 w-3.5" />
+                                            : option.value === 'image'
+                                                ? <ImageIcon className="h-3.5 w-3.5" />
+                                                : <Sparkles className="h-3.5 w-3.5" />}
+                                        <span>{option.label}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
                         <div className="flex items-end gap-2">
                             {/* Hidden file input */}
                             {provider?.capabilities.supportsFileAttachments && (
@@ -1236,6 +1369,11 @@ export function ChatView() {
                                     isDraggingOver ? 'Drop image here...' :
                                     !activeNodeId ? 'Start a new conversation...' :
                                     path[path.length - 1]?.role === 'user' ? 'Try an alternative prompt...' :
+                                    responseMode === 'image'
+                                        ? 'Describe the image to generate or edit...'
+                                        : responseMode === 'multimodal'
+                                            ? 'Ask for text plus generated images...'
+                                            :
                                     provider?.capabilities.supportsFileAttachments
                                         ? (isImageOnlyAttachmentMode() ? 'Reply or attach an image...' : 'Reply, paste an image, or attach a file...')
                                         : 'Reply to this message...'

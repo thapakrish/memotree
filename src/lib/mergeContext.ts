@@ -5,7 +5,7 @@ import type {
     MergeContextMode,
     MessageNode,
 } from '../store/types';
-import { getFinalAnswerText, getNodeSummary } from './chatEvents';
+import { getFinalAnswerText, getImageArtifacts, getNodeSummary } from './chatEvents';
 
 function getPathByParentId(nodes: Record<string, MessageNode>, nodeId: string): MessageNode[] {
     const path: MessageNode[] = [];
@@ -39,6 +39,11 @@ function getArtifactLines(node: MessageNode): string[] {
         }
     }
 
+    const images = getImageArtifacts(node.events);
+    if (images.length > 0) {
+        artifactLines.push(`generated images: ${images.length}`);
+    }
+
     if ((node.memoryPatches?.length ?? 0) > 0) {
         artifactLines.push(`memory updates: ${node.memoryPatches.length}`);
     }
@@ -59,6 +64,11 @@ function getNodeBody(node: MessageNode): string {
     const thought = node.events?.find((event) => event.kind === 'thought');
     if (thought && thought.kind === 'thought') {
         return thought.text;
+    }
+
+    const imageArtifacts = getImageArtifacts(node.events);
+    if (imageArtifacts.length > 0) {
+        return `Generated ${imageArtifacts.length} image${imageArtifacts.length === 1 ? '' : 's'}`;
     }
 
     return node.content;

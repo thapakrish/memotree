@@ -11,6 +11,8 @@ export type AttachmentMimeType =
     | 'audio/mpeg' | 'audio/mp4' | 'audio/wav' | 'audio/ogg' | 'audio/webm' | 'audio/flac';
 
 export type AttachmentKind = 'image' | 'pdf' | 'audio';
+export type AssistantResponseMode = 'text' | 'image' | 'multimodal';
+export type ImageArtifactMimeType = Extract<AttachmentMimeType, 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'>;
 
 export interface AttachmentPart {
     id: string;
@@ -20,7 +22,15 @@ export interface AttachmentPart {
     data: string;
     name?: string;
     sizeBytes?: number;
-    sourceType: 'clipboard' | 'file' | 'drop';
+    sourceType: 'clipboard' | 'file' | 'drop' | 'generated';
+}
+
+export interface ImageArtifact {
+    id: string;
+    mimeType: ImageArtifactMimeType;
+    data: string;
+    model?: string;
+    label?: string;
 }
 
 export type ImportSourcePlatform = 'chatgpt' | 'claude' | 'gemini' | 'other';
@@ -118,6 +128,10 @@ export type ChatEvent =
     | {
         kind: 'text';
         text: string;
+    }
+    | {
+        kind: 'image_artifact';
+        artifact: ImageArtifact;
     };
 
 export type MergeContextMode = 'full' | 'compact' | 'artifacts';
@@ -174,6 +188,7 @@ export interface MessageNode {
     kind?: 'message' | 'merge';
     role: 'user' | 'assistant' | 'system';
     content: string;
+    responseMode?: AssistantResponseMode;
     attachments?: AttachmentPart[];
     events?: ChatEvent[];
     mergeContext?: MergeContext;

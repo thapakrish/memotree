@@ -20,7 +20,7 @@ import { getLayoutedElements } from '../lib/layout';
 import { MergeBranchesModal } from './MergeBranchesModal';
 import { GroupNodesModal } from './GroupNodesModal';
 import { PathCompareModal } from './PathCompareModal';
-import { buildGeminiContents, generateGeminiResponseStreamFromContents, getAssistantText } from '../lib/geminiEngine';
+import { buildGeminiContents, extractAssistantEvents, generateGeminiResponseStreamFromContents, getAssistantText } from '../lib/geminiEngine';
 import { buildMergeContext, buildMergeRequestContents, isMergeableAssistant } from '../lib/mergeContext';
 import { getNodeSummary, mergeEvents } from '../lib/chatEvents';
 import type { ChatEvent, MergeContextMode } from '../store/types';
@@ -318,14 +318,7 @@ export function GraphView() {
 
             let events: ChatEvent[] = [];
             for await (const chunk of stream) {
-                events = mergeEvents(events, chunk.candidates?.[0]?.content?.parts
-                    ? chunk.candidates[0].content.parts.flatMap<ChatEvent>((part) => {
-                        if (!part.text) return [];
-                        return part.thought
-                            ? [{ kind: 'thought', text: part.text, signature: part.thoughtSignature, tokenCount: chunk.usageMetadata?.thoughtsTokenCount }]
-                            : [{ kind: 'text', text: part.text }];
-                    })
-                    : []);
+                events = mergeEvents(events, extractAssistantEvents(chunk));
             }
 
             const assistantText = getAssistantText(events) || 'Merged branch created.';
