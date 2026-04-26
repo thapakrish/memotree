@@ -13,6 +13,7 @@ import { MarkdownRenderer } from './MarkdownRenderer';
 import { ContextInspector } from './ContextInspector';
 import { featureFlags, isImageOnlyAttachmentMode } from '../config/featureFlags';
 import { buildImageArtifactFileName, buildImageArtifactPath } from '../lib/artifactFiles';
+import { getImageSource, readImageUrlAsBase64, saveImageArtifactFile } from '../lib/artifactStorage';
 import logoMark from '../assets/logo-mark.svg';
 
 function getTextSummary(text: string): string {
@@ -23,7 +24,10 @@ function roughTokens(text: string): number {
     return Math.ceil(text.length / 4);
 }
 
-function estimateImageTokens(base64: string): number {
+function estimateImageTokens(base64?: string): number {
+    if (!base64) {
+        return 258;
+    }
     const rawBytes = base64.length * 0.75;
     const estimatedTiles = Math.ceil(rawBytes / (768 * 768 * 3));
     return Math.max(258, estimatedTiles * 258);
@@ -52,8 +56,9 @@ function createAttachmentFromArtifact(artifact: ImageArtifact, use: AttachmentPa
         data: artifact.data,
         artifactId,
         artifactPath: artifact.artifactPath ?? buildImageArtifactPath(artifactId, name),
+        url: artifact.url,
         name,
-        sizeBytes: Math.floor(artifact.data.length * 0.75),
+        sizeBytes: artifact.data ? Math.floor(artifact.data.length * 0.75) : undefined,
         sourceType: 'generated',
         use,
     };
@@ -67,6 +72,7 @@ function createAttachmentFromFileArtifact(artifact: ImageFileArtifact, use: Atta
         data: artifact.data,
         artifactId: artifact.id,
         artifactPath: artifact.path,
+        url: artifact.url,
         name: artifact.name,
         sizeBytes: artifact.sizeBytes,
         sourceType: artifact.origin === 'generated' ? 'generated' : 'file',
@@ -443,14 +449,21 @@ function AssistantMessageBody({
                                 isStreaming={isStreaming && index === lastTextIndex}
                             />
                         );
-                    case 'image_artifact':
+                    case 'image_artifact': {
+                        const imageSource = getImageSource(event.artifact);
                         return (
                             <div key={`${event.kind}-${event.artifact.id}`} className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-                                <img
-                                    src={`data:${event.artifact.mimeType};base64,${event.artifact.data}`}
-                                    alt={event.artifact.label ?? 'generated image'}
-                                    className="max-h-[28rem] w-full object-contain bg-white"
-                                />
+                                {imageSource ? (
+                                    <img
+                                        src={imageSource}
+                                        alt={event.artifact.label ?? 'generated image'}
+                                        className="max-h-[28rem] w-full object-contain bg-white"
+                                    />
+                                ) : (
+                                    <div className="flex min-h-32 items-center justify-center bg-slate-100 px-4 text-center text-xs font-medium text-slate-500">
+                                        Image saved without inline preview data
+                                    </div>
+                                )}
                                 <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-3 py-2">
                                     <div className="min-w-0">
                                         <div className="truncate text-[11px] font-medium text-slate-700">
@@ -487,6 +500,7 @@ function AssistantMessageBody({
                                 </div>
                             </div>
                         );
+                    }
                 }
             })}
         </div>
@@ -512,6 +526,7 @@ export function ChatView() {
         addCompaction,
         removeCompaction,
         artifacts,
+        markImageArtifactsStored,
     } = useGraphStore();
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
@@ -652,6 +667,71 @@ export function ChatView() {
         e.target.value = '';
     };
 
+    const resolveAttachmentData = async (attachment: AttachmentPart): Promise<AttachmentPart> => {
+        if (attachment.kind !== 'image' || attachment.data) {
+            return attachment;
+        }
+
+        const artifactUrl = attachment.url ?? (attachment.artifactId ? artifacts[attachment.artifactId]?.url : undefined);
+        if (!artifactUrl) {
+            return attachment;
+        }
+
+        return {
+            ...attachment,
+            data: await readImageUrlAsBase64(artifactUrl),
+        };
+    };
+
+    const hydratePathImageAttachments = async (nodes: MessageNode[]): Promise<MessageNode[]> => {
+        return Promise.all(nodes.map(async (node) => {
+            if ((node.attachments?.length ?? 0) === 0) {
+                return node;
+            }
+
+            const attachments = await Promise.all(node.attachments!.map(resolveAttachmentData));
+            return { ...node, attachments };
+        }));
+    };
+
+    const persistNodeImageArtifacts = async (nodeId: string) => {
+        const state = useGraphStore.getState();
+        const node = state.nodes[nodeId];
+        if (!node) {
+            return;
+        }
+
+        const artifactIds = new Set<string>();
+        for (const attachment of node.attachments ?? []) {
+            if (attachment.kind === 'image' && attachment.artifactId) {
+                artifactIds.add(attachment.artifactId);
+            }
+        }
+        for (const event of node.events ?? []) {
+            if (event.kind === 'image_artifact') {
+                artifactIds.add(event.artifact.artifactId ?? event.artifact.id);
+            }
+        }
+
+        const imagesToSave = [...artifactIds]
+            .map((artifactId) => state.artifacts[artifactId])
+            .filter((artifact): artifact is ImageFileArtifact => Boolean(artifact?.data));
+
+        if (imagesToSave.length === 0) {
+            return;
+        }
+
+        try {
+            const updates = (await Promise.all(imagesToSave.map((artifact) =>
+                saveImageArtifactFile(state.sessionId, artifact),
+            ))).filter((update): update is NonNullable<typeof update> => Boolean(update));
+            markImageArtifactsStored(updates);
+        } catch (error) {
+            console.error('Image artifact filesystem save failed:', error);
+            showStatus('error', 'Image file save failed. Keeping inline image data for this session.');
+        }
+    };
+
     const path = getPath(activeNodeId);
     const branchImageArtifacts = useMemo(() => {
         const pathNodeIds = new Set(path.map((node) => node.id));
@@ -788,11 +868,12 @@ export function ChatView() {
 
         try {
             const newPath = getPath(userNodeId);
-            const memoryState = reconstructMemory(newPath);
-            const lastNode = newPath[newPath.length - 1];
+            const requestPath = await hydratePathImageAttachments(newPath);
+            const memoryState = reconstructMemory(requestPath);
+            const lastNode = requestPath[requestPath.length - 1];
             const requestedResponseMode = lastNode?.responseMode ?? 'text';
             const initialDelta = await collectProviderStream(
-                provider.stream(newPath, memoryState, compactions, controller.signal, { responseMode: requestedResponseMode }),
+                provider.stream(requestPath, memoryState, compactions, controller.signal, { responseMode: requestedResponseMode }),
                 setStreamingEvents,
                 setThoughtsTokenCount,
             );
@@ -869,7 +950,7 @@ export function ChatView() {
 
                 const followUpDelta = await collectProviderStream(
                     provider.continueWithToolResults(
-                        newPath, compactions, events, pendingFunctionCalls,
+                        requestPath, compactions, events, pendingFunctionCalls,
                         functionResponses, nextMemoryState, controller.signal, { responseMode: requestedResponseMode },
                     ),
                     setStreamingEvents,
@@ -898,7 +979,7 @@ export function ChatView() {
             // Only save node if we got something (even if aborted mid-stream)
             if (events.length > 0) {
                 const assistantText = getAssistantText(events) || getNodeSummary({ role: 'assistant', events, content: '' });
-                addNode({
+                const assistantNodeId = addNode({
                     parentId: userNodeId,
                     role: 'assistant',
                     responseMode: requestedResponseMode,
@@ -907,6 +988,7 @@ export function ChatView() {
                     memoryPatches: patches,
                     summary: getNodeSummary({ role: 'assistant', events, content: assistantText }),
                 });
+                void persistNodeImageArtifacts(assistantNodeId);
             }
         } catch (err) {
             console.error(err);
@@ -925,7 +1007,21 @@ export function ChatView() {
         const activeNode = path.length > 0 ? path[path.length - 1] : null;
         const parentId = activeNode?.role === 'user' ? activeNode.parentId : activeNodeId;
         const nextInput = input;
-        const nextAttachments = attachments;
+        let nextAttachments: AttachmentPart[];
+
+        try {
+            nextAttachments = await Promise.all(attachments.map(resolveAttachmentData));
+        } catch (error) {
+            console.error('Image artifact load failed:', error);
+            showStatus('error', 'Unable to load one of the selected image files.');
+            return;
+        }
+
+        const missingImageData = nextAttachments.some((attachment) => attachment.kind === 'image' && !attachment.data);
+        if (missingImageData) {
+            showStatus('error', 'One selected image is missing file data and cannot be sent.');
+            return;
+        }
 
         const userNodeId = addNode({
             parentId,
@@ -940,6 +1036,7 @@ export function ChatView() {
         setInput('');
         setAttachments([]);
         await generateAssistantReply(userNodeId);
+        void persistNodeImageArtifacts(userNodeId);
     };
 
     const handleRegenerate = async (assistantNode: MessageNode) => {
@@ -1215,12 +1312,18 @@ export function ChatView() {
                                             <div className="mb-2 flex flex-wrap gap-2">
                                                 {msg.attachments!.map((att) => (
                                                     att.kind === 'image' ? (
-                                                        <img
-                                                            key={att.id}
-                                                            src={`data:${att.mimeType};base64,${att.data}`}
-                                                            alt={att.name ?? 'attachment'}
-                                                            className="max-h-48 max-w-full rounded-lg object-contain"
-                                                        />
+                                                        getImageSource(att) ? (
+                                                            <img
+                                                                key={att.id}
+                                                                src={getImageSource(att)}
+                                                                alt={att.name ?? 'attachment'}
+                                                                className="max-h-48 max-w-full rounded-lg object-contain"
+                                                            />
+                                                        ) : (
+                                                            <div key={att.id} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">
+                                                                {att.name ?? 'Image attachment'}
+                                                            </div>
+                                                        )
                                                     ) : (
                                                         <div key={att.id} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium ${att.kind === 'pdf' ? 'border-red-200 bg-red-50 text-red-700' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
                                                             {att.kind === 'pdf' ? <FileText className="h-3.5 w-3.5 shrink-0" /> : <Music className="h-3.5 w-3.5 shrink-0" />}
@@ -1386,11 +1489,17 @@ export function ChatView() {
                                     <div key={att.id} className="group/chip relative rounded-lg overflow-hidden border border-slate-200 shadow-sm">
                                         {att.kind === 'image' ? (
                                             <>
-                                                <img
-                                                    src={`data:${att.mimeType};base64,${att.data}`}
-                                                    alt={att.name ?? 'image'}
-                                                    className="h-16 w-16 object-cover"
-                                                />
+                                                {getImageSource(att) ? (
+                                                    <img
+                                                        src={getImageSource(att)}
+                                                        alt={att.name ?? 'image'}
+                                                        className="h-16 w-16 object-cover"
+                                                    />
+                                                ) : (
+                                                    <div className="flex h-16 w-16 items-center justify-center bg-blue-50">
+                                                        <ImageIcon className="h-5 w-5 text-blue-400" />
+                                                    </div>
+                                                )}
                                                 <button
                                                     onClick={() => toggleAttachmentUse(att.id)}
                                                     className={`absolute bottom-1 left-1 rounded px-1.5 py-0.5 text-[9px] font-semibold shadow-sm ${
@@ -1599,7 +1708,7 @@ export function ChatView() {
                                         title={artifact.path}
                                     >
                                         <img
-                                            src={`data:${artifact.mimeType};base64,${artifact.data}`}
+                                            src={getImageSource(artifact)}
                                             alt={artifact.label ?? artifact.name}
                                             className="aspect-square w-full bg-slate-50 object-cover"
                                         />

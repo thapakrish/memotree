@@ -64,7 +64,12 @@ function roughTokens(text: string): number {
 
 function estimateGeminiAttachmentTokens(attachments: AttachmentPart[] = []): number {
     return attachments.reduce((sum, attachment) => {
-        const rawBytes = attachment.data.length * 0.75;
+        const rawBytes = attachment.data
+            ? attachment.data.length * 0.75
+            : attachment.sizeBytes ?? 0;
+        if (rawBytes === 0) {
+            return sum;
+        }
         const estimatedTiles = Math.ceil(rawBytes / (768 * 768 * 3));
         return sum + Math.max(258, estimatedTiles * 258);
     }, 0);

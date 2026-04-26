@@ -185,7 +185,9 @@ function toModelParts(node: MessageNode): Part[] {
         const parts: Part[] = [{ text: node.content }];
         for (const [index, att] of (node.attachments ?? []).entries()) {
             parts.push({ text: describeAttachmentForModel(att, index) });
-            parts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
+            if (att.data) {
+                parts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
+            }
         }
         return parts;
     }
@@ -220,12 +222,16 @@ function toModelParts(node: MessageNode): Part[] {
                 case 'tool_result':
                     return [];
                 case 'image_artifact':
-                    return [{
-                        inlineData: {
-                            mimeType: event.artifact.mimeType,
-                            data: event.artifact.data,
-                        },
-                    }];
+                    return event.artifact.data
+                        ? [{
+                            inlineData: {
+                                mimeType: event.artifact.mimeType,
+                                data: event.artifact.data,
+                            },
+                        }]
+                        : [{
+                            text: `[generated_image] ref=${event.artifact.artifactPath ?? event.artifact.artifactId ?? event.artifact.id}; mime=${event.artifact.mimeType}`,
+                        }];
             }
             }),
         ];
@@ -261,12 +267,14 @@ function buildPendingDraftContent(
     }
     for (const [index, attachment] of (pendingAttachments ?? []).entries()) {
         parts.push({ text: describeAttachmentForModel(attachment, index) });
-        parts.push({
-            inlineData: {
-                mimeType: attachment.mimeType,
-                data: attachment.data,
-            },
-        });
+        if (attachment.data) {
+            parts.push({
+                inlineData: {
+                    mimeType: attachment.mimeType,
+                    data: attachment.data,
+                },
+            });
+        }
     }
     return [{ role: 'user', parts }];
 }
@@ -524,12 +532,14 @@ export function createModelToolCallContent(
                 case 'tool_result':
                     return [];
                 case 'image_artifact':
-                    return [{
-                        inlineData: {
-                            mimeType: event.artifact.mimeType,
-                            data: event.artifact.data,
-                        },
-                    }];
+                    return event.artifact.data
+                        ? [{
+                            inlineData: {
+                                mimeType: event.artifact.mimeType,
+                                data: event.artifact.data,
+                            },
+                        }]
+                        : [];
             }
         }),
         ...functionCalls.map((call) => ({

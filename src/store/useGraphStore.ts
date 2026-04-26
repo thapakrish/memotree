@@ -6,6 +6,7 @@ import type {
     CompactionBlock,
     ContextGroup,
     ImageFileArtifact,
+    ImageArtifactStorageUpdate,
     ImportedTurn,
     ImportSourcePlatform,
     ImportMode,
@@ -14,7 +15,7 @@ import type {
     MemoryPatch,
     StructureSuggestion,
 } from './types';
-import { buildImageArtifactFileName, buildImageArtifactPath } from '../lib/artifactFiles';
+import { buildImageArtifactFileName, buildImageArtifactPath, buildImageArtifactUrl } from '../lib/artifactFiles';
 import { deriveSessionTitle, loadLastSession, loadSession, markLastSession, saveSession, type PersistedSession, validatePersistedSession } from '../lib/sessionPersistence';
 import { applyAcceptedStructureSuggestions } from '../lib/import/applyStructureSuggestions';
 import { inferStructureRules } from '../lib/import/inferStructureRules';
@@ -53,6 +54,7 @@ interface GraphState extends ConversationGraph {
     removeCompaction: (id: string) => void;
     createGroup: (group: Omit<ContextGroup, 'id'>) => string;
     addNode: (node: Omit<MessageNode, 'id' | 'timestamp'>) => string;
+    markImageArtifactsStored: (updates: ImageArtifactStorageUpdate[]) => void;
     setUiPosition: (id: string, position: { x: number; y: number }) => void;
     setActiveNode: (id: string | null) => void;
     updateNodeSummary: (id: string, summary: string) => void;
@@ -144,6 +146,10 @@ function buildPreviewImportState(
     };
 }
 
+function estimateBase64Size(data?: string): number | undefined {
+    return data ? Math.floor(data.length * 0.75) : undefined;
+}
+
 function createImageArtifactRecordFromAttachment(
     attachment: AttachmentPart,
     nodeId: string,
@@ -152,22 +158,25 @@ function createImageArtifactRecordFromAttachment(
     const artifactId = attachment.artifactId ?? crypto.randomUUID();
     const name = attachment.name ?? buildImageArtifactFileName(artifactId, attachment.mimeType as ImageFileArtifact['mimeType']);
     const path = attachment.artifactPath ?? buildImageArtifactPath(artifactId, name);
+    const url = attachment.url ?? buildImageArtifactUrl(artifactId, name);
 
     return {
         attachment: {
             ...attachment,
             artifactId,
             artifactPath: path,
+            url,
             name,
         },
         artifact: {
             id: artifactId,
             kind: 'image',
             path,
+            url,
             mimeType: attachment.mimeType as ImageFileArtifact['mimeType'],
             data: attachment.data,
             name,
-            sizeBytes: attachment.sizeBytes ?? Math.floor(attachment.data.length * 0.75),
+            sizeBytes: attachment.sizeBytes ?? estimateBase64Size(attachment.data),
             origin: attachment.sourceType === 'generated' ? 'generated' : 'upload',
             createdAt: timestamp,
             sourceNodeId: nodeId,
@@ -184,6 +193,7 @@ function createImageArtifactRecordFromEvent(
     const artifactId = event.artifact.artifactId ?? event.artifact.id;
     const name = buildImageArtifactFileName(artifactId, event.artifact.mimeType, event.artifact.label);
     const path = event.artifact.artifactPath ?? buildImageArtifactPath(artifactId, name);
+    const url = event.artifact.url ?? buildImageArtifactUrl(artifactId, name);
 
     return {
         event: {
@@ -192,16 +202,18 @@ function createImageArtifactRecordFromEvent(
                 ...event.artifact,
                 artifactId,
                 artifactPath: path,
+                url,
             },
         },
         artifact: {
             id: artifactId,
             kind: 'image',
             path,
+            url,
             mimeType: event.artifact.mimeType,
             data: event.artifact.data,
             name,
-            sizeBytes: Math.floor(event.artifact.data.length * 0.75),
+            sizeBytes: estimateBase64Size(event.artifact.data),
             origin: 'generated',
             createdAt: timestamp,
             sourceNodeId: nodeId,
@@ -250,6 +262,60 @@ function attachImageFileArtifactsToNode(
     }
 
     return { node: nextNode, artifacts };
+}
+
+function applyStorageUpdatesToNode(
+    node: MessageNode,
+    updates: Map<string, ImageArtifactStorageUpdate>,
+): MessageNode {
+    let nextNode = node;
+
+    if ((node.attachments?.length ?? 0) > 0) {
+        const attachments = node.attachments!.map((attachment) => {
+            const artifactId = attachment.artifactId;
+            const update = artifactId ? updates.get(artifactId) : undefined;
+            if (!update) {
+                return attachment;
+            }
+
+            return {
+                ...attachment,
+                artifactPath: update.path,
+                url: update.url,
+                sizeBytes: update.sizeBytes ?? attachment.sizeBytes,
+                data: undefined,
+            };
+        });
+        nextNode = { ...nextNode, attachments };
+    }
+
+    if ((node.events?.length ?? 0) > 0) {
+        const events = node.events!.map((event) => {
+            if (event.kind !== 'image_artifact') {
+                return event;
+            }
+
+            const artifactId = event.artifact.artifactId ?? event.artifact.id;
+            const update = updates.get(artifactId);
+            if (!update) {
+                return event;
+            }
+
+            return {
+                ...event,
+                artifact: {
+                    ...event.artifact,
+                    artifactId,
+                    artifactPath: update.path,
+                    url: update.url,
+                    data: undefined,
+                },
+            };
+        });
+        nextNode = { ...nextNode, events };
+    }
+
+    return nextNode;
 }
 
 export const useGraphStore = create<GraphState>((set, get) => ({
@@ -642,6 +708,44 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
         return id;
     },
+
+    markImageArtifactsStored: (updates) => set((state) => {
+        if (updates.length === 0) {
+            return state;
+        }
+
+        const updateById = new Map(updates.map((update) => [update.artifactId, update]));
+        const artifacts = { ...state.artifacts };
+        let changed = false;
+
+        for (const update of updates) {
+            const artifact = artifacts[update.artifactId];
+            if (!artifact) {
+                continue;
+            }
+            artifacts[update.artifactId] = {
+                ...artifact,
+                path: update.path,
+                url: update.url,
+                sizeBytes: update.sizeBytes ?? artifact.sizeBytes,
+                data: undefined,
+            };
+            changed = true;
+        }
+
+        if (!changed) {
+            return state;
+        }
+
+        const nodes = Object.fromEntries(
+            Object.entries(state.nodes).map(([id, node]) => [
+                id,
+                applyStorageUpdatesToNode(node, updateById),
+            ]),
+        );
+
+        return { artifacts, nodes };
+    }),
 
     setUiPosition: (id, position) => set((state) => ({
         uiPositions: {

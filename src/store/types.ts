@@ -20,10 +20,11 @@ export interface AttachmentPart {
     id: string;
     kind: AttachmentKind;
     mimeType: AttachmentMimeType;
-    /** Base64-encoded file data (no data URL prefix). */
-    data: string;
+    /** Base64-encoded file data (no data URL prefix). Present only while composing/model calls need inline bytes. */
+    data?: string;
     artifactId?: string;
     artifactPath?: string;
+    url?: string;
     name?: string;
     sizeBytes?: number;
     sourceType: 'clipboard' | 'file' | 'drop' | 'generated';
@@ -33,9 +34,10 @@ export interface AttachmentPart {
 export interface ImageArtifact {
     id: string;
     mimeType: ImageArtifactMimeType;
-    data: string;
+    data?: string;
     artifactId?: string;
     artifactPath?: string;
+    url?: string;
     model?: string;
     label?: string;
 }
@@ -44,9 +46,10 @@ export interface ImageFileArtifact {
     id: string;
     kind: 'image';
     path: string;
+    url?: string;
     mimeType: ImageArtifactMimeType;
-    /** Base64-encoded file data (no data URL prefix). Moves to blob storage in the next persistence step. */
-    data: string;
+    /** Base64-encoded file data (no data URL prefix). Used as a fallback before filesystem persistence completes. */
+    data?: string;
     name: string;
     sizeBytes?: number;
     origin: ImageFileOrigin;
@@ -57,6 +60,13 @@ export interface ImageFileArtifact {
     parentArtifactIds?: string[];
     model?: string;
     label?: string;
+}
+
+export interface ImageArtifactStorageUpdate {
+    artifactId: string;
+    path: string;
+    url: string;
+    sizeBytes?: number;
 }
 
 export type ImportSourcePlatform = 'chatgpt' | 'claude' | 'gemini' | 'other';

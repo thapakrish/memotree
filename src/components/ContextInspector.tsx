@@ -13,7 +13,10 @@ function roughTokens(text: string): number {
     return Math.ceil(text.length / 4);
 }
 
-function estimateImageTokens(base64: string): number {
+function estimateImageTokens(base64?: string): number {
+    if (!base64) {
+        return 258;
+    }
     const rawBytes = base64.length * 0.75;
     const estimatedTiles = Math.ceil(rawBytes / (768 * 768 * 3));
     return Math.max(258, estimatedTiles * 258);

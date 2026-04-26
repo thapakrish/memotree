@@ -29,8 +29,10 @@ export function appendEvent(events: ChatEvent[], nextEvent: ChatEvent): ChatEven
     if (nextEvent.kind === 'image_artifact') {
         const duplicate = events.some((event) =>
             event.kind === 'image_artifact'
-            && event.artifact.mimeType === nextEvent.artifact.mimeType
-            && event.artifact.data === nextEvent.artifact.data,
+            && (
+                (event.artifact.artifactId && event.artifact.artifactId === nextEvent.artifact.artifactId)
+                || (event.artifact.data && nextEvent.artifact.data && event.artifact.data === nextEvent.artifact.data)
+            ),
         );
         if (duplicate) {
             return events;

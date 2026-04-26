@@ -34,3 +34,7 @@ export function buildImageArtifactFileName(
 export function buildImageArtifactPath(artifactId: string, fileName: string): string {
     return `/artifacts/images/${artifactId}/${fileName}`;
 }
+
+export function buildImageArtifactUrl(artifactId: string, fileName: string): string {
+    return `/api${buildImageArtifactPath(artifactId, fileName)}`;
+}
