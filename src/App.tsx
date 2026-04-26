@@ -4,10 +4,39 @@ import { ReactFlowProvider } from '@xyflow/react';
 import { CommandPalette } from './components/CommandPalette';
 import { ShortcutsPanel } from './components/ShortcutsPanel';
 import { useGraphStore } from './store/useGraphStore';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { featureFlags } from './config/featureFlags';
+import { MessageSquare, GitBranch } from 'lucide-react';
+
+type MobileTab = 'chat' | 'tree';
+
+function MobileTabBar({ tab, onChange }: { tab: MobileTab; onChange: (t: MobileTab) => void }) {
+  return (
+    <div className="flex h-14 shrink-0 border-t border-slate-200 bg-white">
+      <button
+        onClick={() => onChange('chat')}
+        className={`flex flex-1 flex-col items-center justify-center gap-1 text-[11px] font-semibold transition-colors ${
+          tab === 'chat' ? 'text-blue-600' : 'text-slate-400'
+        }`}
+      >
+        <MessageSquare className="h-5 w-5" />
+        Chat
+      </button>
+      <button
+        onClick={() => onChange('tree')}
+        className={`flex flex-1 flex-col items-center justify-center gap-1 text-[11px] font-semibold transition-colors ${
+          tab === 'tree' ? 'text-blue-600' : 'text-slate-400'
+        }`}
+      >
+        <GitBranch className="h-5 w-5" />
+        Tree
+      </button>
+    </div>
+  );
+}
 
 function App() {
+  const [mobileTab, setMobileTab] = useState<MobileTab>('chat');
   const {
     isHydrated,
     hydrateSession,
@@ -28,22 +57,14 @@ function App() {
     }
 
     const handleGlobalShortcuts = (e: KeyboardEvent) => {
-      // Allow default text navigation if typing in an input or textarea
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
-          return; 
+          return;
       }
-
-      // If we made it past the input check, we assume the user is "on the canvas" (or at least not in an input).
-      // We will allow BOTH 'Cmd + Arrow' AND just plain 'Arrow' for tree navigation to reduce friction.
-      // E.g. someone might prefer just tapping 'Up' to undo.
-
-      // e.g. cmdOrCtrl check removed since plain arrow keys are now permitted
 
       switch (e.key) {
         case 'ArrowUp':
         case 'p':
-          // C-p / UP
           e.preventDefault();
           if (e.shiftKey && e.key === 'ArrowUp') {
             goToRoot();
@@ -53,19 +74,16 @@ function App() {
           break;
         case 'ArrowDown':
         case 'n':
-          // C-n / DOWN
           e.preventDefault();
           goToLatestChild();
           break;
         case 'ArrowLeft':
         case 'b':
-          // C-b / LEFT
           e.preventDefault();
           prevSibling();
           break;
         case 'ArrowRight':
         case 'f':
-          // C-f / RIGHT
           e.preventDefault();
           nextSibling();
           break;
@@ -85,23 +103,36 @@ function App() {
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-900 font-sans">
-      {/* Pane A: Chat View (Fixed Width Sidebar) */}
-      <div className="w-[450px] min-w-[350px] max-w-[600px] h-full overflow-hidden shrink-0 shadow-xl" style={{ zIndex: 10 }}>
-        <ChatView />
+    <>
+      {/* ── Mobile layout (< md) ── */}
+      <div className="flex h-dvh w-screen flex-col overflow-hidden bg-white font-sans md:hidden">
+        <div className={`min-h-0 flex-1 overflow-hidden ${mobileTab === 'chat' ? 'block' : 'hidden'}`}>
+          <ChatView />
+        </div>
+        <div className={`min-h-0 flex-1 overflow-hidden ${mobileTab === 'tree' ? 'block' : 'hidden'}`}>
+          <ReactFlowProvider>
+            <GraphView />
+          </ReactFlowProvider>
+        </div>
+        <MobileTabBar tab={mobileTab} onChange={setMobileTab} />
       </div>
 
-      {/* Pane B: Graph View (Flexible Canvas) */}
-      <div className="flex-1 h-full z-0 relative">
-        <ReactFlowProvider>
-          <GraphView />
-          <ShortcutsPanel />
-        </ReactFlowProvider>
+      {/* ── Desktop layout (≥ md) ── */}
+      <div className="hidden h-screen w-screen overflow-hidden bg-slate-900 font-sans md:flex">
+        {/* Pane A: Chat */}
+        <div className="h-full w-[450px] shrink-0 overflow-hidden shadow-xl" style={{ zIndex: 10 }}>
+          <ChatView />
+        </div>
+        {/* Pane B: Graph */}
+        <div className="relative h-full flex-1">
+          <ReactFlowProvider>
+            <GraphView />
+            <ShortcutsPanel />
+          </ReactFlowProvider>
+        </div>
+        {featureFlags.keyboardPowerTools && <CommandPalette />}
       </div>
-      
-      {/* Global Command Palette */}
-      {featureFlags.keyboardPowerTools && <CommandPalette />}
-    </div>
+    </>
   );
 }
 

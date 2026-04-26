@@ -117,7 +117,7 @@ export function CommandPalette() {
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-start justify-center pt-[20vh] bg-slate-900/20 backdrop-blur-sm" onClick={() => setIsOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[20vh] bg-slate-900/20 backdrop-blur-sm" onClick={() => setIsOpen(false)}>
             <div
                 className="w-full max-w-xl bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden"
                 onClick={(e) => e.stopPropagation()}

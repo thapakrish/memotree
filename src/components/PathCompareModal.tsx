@@ -235,7 +235,7 @@ export function PathCompareModal({
     const rightLabel = `Branch B · ${rightNode.id.slice(0, 6)}`;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 backdrop-blur-sm overflow-y-auto py-8 px-4">
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 backdrop-blur-sm overflow-y-auto py-4 px-4 sm:py-8">
             <div className="w-full max-w-5xl bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col">
                 {/* Header */}
                 <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
@@ -282,7 +282,7 @@ export function PathCompareModal({
                 )}
 
                 {/* Two-column comparison */}
-                <div className="grid grid-cols-2 gap-6 p-6 min-h-0">
+                <div className="grid grid-cols-1 gap-6 p-4 min-h-0 sm:grid-cols-2 sm:p-6">
                     {leftNode && (
                         <PathColumn
                             label={leftLabel}

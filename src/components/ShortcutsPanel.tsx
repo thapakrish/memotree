@@ -29,7 +29,7 @@ export function ShortcutsPanel() {
         return (
             <button
                 onClick={() => setIsCollapsed(false)}
-                className="absolute bottom-6 right-6 z-10 flex items-center justify-center p-3 bg-white/90 backdrop-blur-md rounded-full shadow-lg border border-slate-200/60 hover:bg-slate-50 transition-colors group"
+                className="absolute bottom-6 right-6 z-10 hidden items-center justify-center p-3 bg-white/90 backdrop-blur-md rounded-full shadow-lg border border-slate-200/60 hover:bg-slate-50 transition-colors group md:flex"
                 title="Show Keyboard Shortcuts"
             >
                 <Keyboard className="w-5 h-5 text-slate-500 group-hover:text-slate-700" />
@@ -38,7 +38,7 @@ export function ShortcutsPanel() {
     }
 
     return (
-        <div className="absolute bottom-6 right-6 z-10 w-64 bg-white/90 backdrop-blur-md rounded-xl shadow-lg border border-slate-200/60 overflow-hidden font-sans">
+        <div className="absolute bottom-6 right-6 z-10 hidden w-64 bg-white/90 backdrop-blur-md rounded-xl shadow-lg border border-slate-200/60 overflow-hidden font-sans md:block">
             <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
                 <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wider">Keyboard Shortcuts</h3>
                 <button

@@ -95,9 +95,9 @@ export function ImportChatModal({ isOpen, onClose }: ImportChatModalProps) {
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 backdrop-blur-sm" onClick={onClose}>
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/30 backdrop-blur-sm sm:items-center" onClick={onClose}>
             <div
-                className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-2xl"
+                className="w-full max-w-3xl rounded-t-2xl border border-slate-200 bg-white shadow-2xl sm:mx-4 sm:rounded-2xl"
                 onClick={(event) => event.stopPropagation()}
                 role="dialog"
                 aria-modal="true"

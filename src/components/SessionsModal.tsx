@@ -109,13 +109,17 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
     const currentSession = sessions.find((s) => s.id === sessionId);
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 backdrop-blur-sm" onClick={onClose}>
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/30 backdrop-blur-sm sm:items-center" onClick={onClose}>
             <div
-                className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-2xl"
+                className="flex max-h-[90dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border border-slate-200 bg-white shadow-2xl sm:mx-4 sm:rounded-2xl"
                 onClick={(e) => e.stopPropagation()}
                 role="dialog"
                 aria-modal="true"
             >
+                {/* Drag handle — visible on mobile only */}
+                <div className="flex justify-center pt-3 sm:hidden">
+                    <div className="h-1 w-10 rounded-full bg-slate-200" />
+                </div>
                 <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
                     <div>
                         <h2 className="text-lg font-semibold text-slate-800">Sessions</h2>
@@ -169,7 +173,7 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
                     </div>
                 </div>
 
-                <div className="grid gap-4 p-6 md:grid-cols-3">
+                <div className="grid gap-4 p-6 sm:grid-cols-2 md:grid-cols-3">
                     <button
                         onClick={() => {
                             createNewSession();
@@ -267,7 +271,7 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
                             No saved sessions besides the current one yet.
                         </div>
                     ) : (
-                        <div className="max-h-[360px] space-y-2 overflow-y-auto">
+                        <div className="max-h-[40dvh] space-y-2 overflow-y-auto sm:max-h-[360px]">
                             {recentSessions.map((session) => (
                                 <div
                                     key={session.id}

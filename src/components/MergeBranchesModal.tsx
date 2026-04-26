@@ -33,13 +33,16 @@ export function MergeBranchesModal({
     }
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 backdrop-blur-sm" onClick={onClose}>
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/30 backdrop-blur-sm sm:items-center" onClick={onClose}>
             <div
-                className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-2xl"
+                className="flex max-h-[90dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border border-slate-200 bg-white shadow-2xl sm:mx-4 sm:rounded-2xl"
                 onClick={(e) => e.stopPropagation()}
                 role="dialog"
                 aria-modal="true"
             >
+                <div className="flex justify-center pt-3 sm:hidden">
+                    <div className="h-1 w-10 rounded-full bg-slate-200" />
+                </div>
                 <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
                     <div>
                         <h2 className="text-lg font-semibold text-slate-800">Merge Branches</h2>
@@ -65,7 +68,7 @@ export function MergeBranchesModal({
                     ))}
                 </div>
 
-                <div className="space-y-4 px-6 pb-6">
+                <div className="space-y-4 overflow-y-auto px-6 pb-6">
                     <div>
                         <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                             Merge Request
