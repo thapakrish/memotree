@@ -172,10 +172,19 @@ export function extractThoughtsTokenCount(response: GenerateContentResponse): nu
     return response.usageMetadata?.thoughtsTokenCount ?? 0;
 }
 
+function describeAttachmentForModel(attachment: AttachmentPart, index: number): string {
+    const role = attachment.kind === 'image' && attachment.use === 'edit_target'
+        ? 'edit_target'
+        : 'context';
+    const fileRef = attachment.artifactPath ?? attachment.artifactId ?? attachment.name ?? attachment.id;
+    return `[attached_file ${index + 1}] kind=${attachment.kind}; role=${role}; ref=${fileRef}; mime=${attachment.mimeType}`;
+}
+
 function toModelParts(node: MessageNode): Part[] {
     if (node.role !== 'assistant') {
         const parts: Part[] = [{ text: node.content }];
-        for (const att of node.attachments ?? []) {
+        for (const [index, att] of (node.attachments ?? []).entries()) {
+            parts.push({ text: describeAttachmentForModel(att, index) });
             parts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
         }
         return parts;
@@ -250,7 +259,8 @@ function buildPendingDraftContent(
     if (hasText) {
         parts.push({ text: pendingText!.trim() });
     }
-    for (const attachment of pendingAttachments ?? []) {
+    for (const [index, attachment] of (pendingAttachments ?? []).entries()) {
+        parts.push({ text: describeAttachmentForModel(attachment, index) });
         parts.push({
             inlineData: {
                 mimeType: attachment.mimeType,

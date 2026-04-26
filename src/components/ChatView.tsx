@@ -42,7 +42,7 @@ function describeAttachment(attachment: AttachmentPart): string {
     return size ? `${label} (${attachment.mimeType}, ${size})` : `${label} (${attachment.mimeType})`;
 }
 
-function createAttachmentFromArtifact(artifact: ImageArtifact): AttachmentPart {
+function createAttachmentFromArtifact(artifact: ImageArtifact, use: AttachmentPart['use'] = 'context'): AttachmentPart {
     const artifactId = artifact.artifactId ?? artifact.id;
     const name = buildImageArtifactFileName(artifactId, artifact.mimeType, artifact.label);
     return {
@@ -55,10 +55,11 @@ function createAttachmentFromArtifact(artifact: ImageArtifact): AttachmentPart {
         name,
         sizeBytes: Math.floor(artifact.data.length * 0.75),
         sourceType: 'generated',
+        use,
     };
 }
 
-function createAttachmentFromFileArtifact(artifact: ImageFileArtifact): AttachmentPart {
+function createAttachmentFromFileArtifact(artifact: ImageFileArtifact, use: AttachmentPart['use'] = 'context'): AttachmentPart {
     return {
         id: crypto.randomUUID(),
         kind: 'image',
@@ -69,7 +70,7 @@ function createAttachmentFromFileArtifact(artifact: ImageFileArtifact): Attachme
         name: artifact.name,
         sizeBytes: artifact.sizeBytes,
         sourceType: artifact.origin === 'generated' ? 'generated' : 'file',
-        use: 'context',
+        use,
     };
 }
 
@@ -365,11 +366,13 @@ function AssistantMessageBody({
     fallbackText,
     isStreaming,
     onUseImageArtifact,
+    onEditImageArtifact,
 }: {
     events?: ChatEvent[];
     fallbackText: string;
     isStreaming?: boolean;
     onUseImageArtifact?: (artifact: ImageArtifact) => void;
+    onEditImageArtifact?: (artifact: ImageArtifact) => void;
 }) {
     const messageEvents = events ?? [];
 
@@ -457,15 +460,29 @@ function AssistantMessageBody({
                                             {event.artifact.model ?? event.artifact.mimeType}
                                         </div>
                                     </div>
-                                    {onUseImageArtifact && (
-                                        <button
-                                            onClick={() => onUseImageArtifact(event.artifact)}
-                                            className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700"
-                                            title="Add this image to the composer"
-                                        >
-                                            <ImageIcon className="h-3 w-3" />
-                                            Use as input
-                                        </button>
+                                    {(onUseImageArtifact || onEditImageArtifact) && (
+                                        <div className="flex shrink-0 items-center gap-1">
+                                            {onUseImageArtifact && (
+                                                <button
+                                                    onClick={() => onUseImageArtifact(event.artifact)}
+                                                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700"
+                                                    title="Add this image as context"
+                                                >
+                                                    <ImageIcon className="h-3 w-3" />
+                                                    Context
+                                                </button>
+                                            )}
+                                            {onEditImageArtifact && (
+                                                <button
+                                                    onClick={() => onEditImageArtifact(event.artifact)}
+                                                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700"
+                                                    title="Use this image as the edit target"
+                                                >
+                                                    <Pencil className="h-3 w-3" />
+                                                    Edit
+                                                </button>
+                                            )}
+                                        </div>
                                     )}
                                 </div>
                             </div>
@@ -534,9 +551,27 @@ export function ChatView() {
         setAttachments((prev) => prev.filter((a) => a.id !== id));
     };
 
+    const toggleAttachmentUse = (id: string) => {
+        setAttachments((prev) => prev.map((attachment) =>
+            attachment.id === id && attachment.kind === 'image'
+                ? {
+                    ...attachment,
+                    use: attachment.use === 'edit_target' ? 'context' : 'edit_target',
+                }
+                : attachment,
+        ));
+    };
+
     const handleReuseArtifact = (artifact: ImageArtifact) => {
         addAttachments([createAttachmentFromArtifact(artifact)]);
         showStatus('info', 'Generated image added to the composer.');
+    };
+
+    const handleEditArtifact = (artifact: ImageArtifact) => {
+        addAttachments([createAttachmentFromArtifact(artifact, 'edit_target')]);
+        setResponseMode('multimodal');
+        showStatus('info', 'Generated image added as the edit target.');
+        requestAnimationFrame(() => textareaRef.current?.focus());
     };
 
     const toggleSelectedArtifact = (artifactId: string) => {
@@ -634,7 +669,7 @@ export function ChatView() {
             .filter((artifactId) => !attachedArtifactIds.has(artifactId))
             .map((artifactId) => artifacts[artifactId])
             .filter((artifact): artifact is ImageFileArtifact => Boolean(artifact))
-            .map(createAttachmentFromFileArtifact);
+            .map((artifact) => createAttachmentFromFileArtifact(artifact));
 
         if (parts.length > 0) {
             addAttachments(parts);
@@ -1172,6 +1207,7 @@ export function ChatView() {
                                         events={msg.events}
                                         fallbackText={msg.content}
                                         onUseImageArtifact={handleReuseArtifact}
+                                        onEditImageArtifact={handleEditArtifact}
                                     />
                                 ) : (
                                     <div>
@@ -1278,6 +1314,7 @@ export function ChatView() {
                                     fallbackText={getFinalAnswerText(streamingDisplayEvents)}
                                     isStreaming
                                     onUseImageArtifact={handleReuseArtifact}
+                                    onEditImageArtifact={handleEditArtifact}
                                 />
                             ) : (
                                 <div className="flex items-center gap-2 text-slate-400 h-6">
@@ -1348,11 +1385,24 @@ export function ChatView() {
                                 {attachments.map((att) => (
                                     <div key={att.id} className="group/chip relative rounded-lg overflow-hidden border border-slate-200 shadow-sm">
                                         {att.kind === 'image' ? (
-                                            <img
-                                                src={`data:${att.mimeType};base64,${att.data}`}
-                                                alt={att.name ?? 'image'}
-                                                className="h-16 w-16 object-cover"
-                                            />
+                                            <>
+                                                <img
+                                                    src={`data:${att.mimeType};base64,${att.data}`}
+                                                    alt={att.name ?? 'image'}
+                                                    className="h-16 w-16 object-cover"
+                                                />
+                                                <button
+                                                    onClick={() => toggleAttachmentUse(att.id)}
+                                                    className={`absolute bottom-1 left-1 rounded px-1.5 py-0.5 text-[9px] font-semibold shadow-sm ${
+                                                        att.use === 'edit_target'
+                                                            ? 'bg-amber-100 text-amber-700'
+                                                            : 'bg-white/90 text-slate-600'
+                                                    }`}
+                                                    title={att.use === 'edit_target' ? 'Treat as edit target' : 'Treat as context'}
+                                                >
+                                                    {att.use === 'edit_target' ? 'Edit' : 'Context'}
+                                                </button>
+                                            </>
                                         ) : (
                                             <div className={`h-16 w-16 flex flex-col items-center justify-center gap-1 ${att.kind === 'pdf' ? 'bg-red-50' : 'bg-indigo-50'}`}>
                                                 {att.kind === 'pdf'
@@ -1365,10 +1415,10 @@ export function ChatView() {
                                         )}
                                         <button
                                             onClick={() => removeAttachment(att.id)}
-                                            className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover/chip:opacity-100 transition-opacity"
+                                            className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover/chip:opacity-100"
                                             title="Remove"
                                         >
-                                            <X className="h-4 w-4 text-white" />
+                                            <X className="h-3 w-3 text-white" />
                                         </button>
                                     </div>
                                 ))}
