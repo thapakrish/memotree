@@ -21,6 +21,9 @@ import { useGraphStore } from '../store/useGraphStore';
 
 const CANVAS_NODE_WIDTH = 390;
 const CANVAS_NODE_HEIGHT = 330;
+const COMPACT_NODE_WIDTH = 190;
+const COMPACT_NODE_HEIGHT = 78;
+const COMPACT_IMAGE_NODE_HEIGHT = 126;
 
 function formatBytes(bytes?: number): string {
     if (!bytes) return '';
@@ -76,6 +79,7 @@ function getNodeImageRefs(
 interface CanvasTurnNodeData {
     node: MessageNode;
     images: CanvasImageRef[];
+    isProminent: boolean;
     isActive: boolean;
     isOnActivePath: boolean;
     selectedArtifactIds: string[];
@@ -91,6 +95,89 @@ interface CanvasTurnNodeProps {
 function CanvasTurnNode({ data }: CanvasTurnNodeProps) {
     const roleLabel = getRoleLabel(data.node.role);
     const imageCount = data.images.length;
+    const nodeWidth = data.isProminent ? CANVAS_NODE_WIDTH : COMPACT_NODE_WIDTH;
+    const nodeIcon = data.node.role === 'assistant'
+        ? <Sparkles className="h-3.5 w-3.5 text-purple-500" />
+        : <MessageSquare className="h-3.5 w-3.5 text-blue-500" />;
+
+    if (!data.isProminent) {
+        return (
+            <div
+                role="button"
+                tabIndex={0}
+                onClick={() => data.onActivate(data.node.id)}
+                onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        data.onActivate(data.node.id);
+                    }
+                }}
+                className={`group overflow-hidden rounded-lg border bg-white shadow-sm transition-colors ${
+                    data.isActive
+                        ? 'border-blue-500 ring-2 ring-blue-200'
+                        : data.isOnActivePath
+                            ? 'border-blue-200 hover:border-blue-400'
+                            : 'border-slate-200 hover:border-slate-400'
+                }`}
+                style={{ width: nodeWidth }}
+                title="Show this turn in chat"
+            >
+                <Handle type="target" position={Position.Top} className="h-3 w-3 bg-slate-400" />
+                <div className="flex items-center justify-between gap-2 px-3 py-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                        {nodeIcon}
+                        <span className="truncate text-xs font-bold uppercase tracking-wide text-slate-600">{roleLabel}</span>
+                    </div>
+                    {imageCount > 0 && (
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
+                            {imageCount}
+                        </span>
+                    )}
+                </div>
+                {imageCount > 0 && (
+                    <div className="flex gap-1 px-3 pb-2">
+                        {data.images.slice(0, 3).map(({ artifact, use, origin }) => {
+                            const imageSource = getImageSource(artifact);
+                            const isSelected = data.selectedArtifactIds.includes(artifact.id);
+                            return (
+                                <div
+                                    key={artifact.id}
+                                    className={`relative h-10 flex-1 overflow-hidden rounded border bg-slate-50 ${
+                                        isSelected ? 'border-blue-500 ring-1 ring-blue-200' : 'border-slate-200'
+                                    }`}
+                                >
+                                    {imageSource ? (
+                                        <img
+                                            src={imageSource}
+                                            alt={artifact.label ?? artifact.name}
+                                            className="h-full w-full object-cover"
+                                            loading="lazy"
+                                        />
+                                    ) : (
+                                        <div className="flex h-full w-full items-center justify-center text-slate-300">
+                                            <ImageIcon className="h-4 w-4" />
+                                        </div>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onMouseDown={(event) => event.stopPropagation()}
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            data.onPreview(artifact.id);
+                                        }}
+                                        className="nodrag nopan absolute inset-0"
+                                        title={`Open ${use === 'edit_target' ? 'edit target' : origin} image`}
+                                        aria-label="Open large preview"
+                                    />
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+                <Handle type="source" position={Position.Bottom} className="h-3 w-3 bg-slate-400" />
+            </div>
+        );
+    }
 
     return (
         <div
@@ -110,15 +197,13 @@ function CanvasTurnNode({ data }: CanvasTurnNodeProps) {
                         ? 'border-blue-200 hover:border-blue-400'
                         : 'border-slate-200 hover:border-slate-400'
             }`}
-            style={{ width: CANVAS_NODE_WIDTH }}
+            style={{ width: nodeWidth }}
             title="Show this turn in chat"
         >
             <Handle type="target" position={Position.Top} className="h-3 w-3 bg-slate-400" />
             <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
                 <div className="flex items-center gap-2">
-                    {data.node.role === 'assistant'
-                        ? <Sparkles className="h-3.5 w-3.5 text-purple-500" />
-                        : <MessageSquare className="h-3.5 w-3.5 text-blue-500" />}
+                    {nodeIcon}
                     <span className="text-xs font-bold uppercase tracking-wide text-slate-600">{roleLabel}</span>
                 </div>
                 <span className="text-[11px] font-medium text-slate-400">
@@ -233,21 +318,34 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
     const { flowNodes, flowEdges, imageNodeCount } = useMemo(() => {
         const rawNodes: Node[] = Object.values(storeNodes)
             .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
-            .map((node) => ({
-                id: node.id,
-                type: 'canvasTurn',
-                position: { x: 0, y: 0 },
-                data: {
-                    node,
-                    images: getNodeImageRefs(node, artifacts),
-                    isActive: node.id === activeNodeId,
-                    isOnActivePath: activePathIds.has(node.id),
-                    selectedArtifactIds: canvasSelectedArtifactIds,
-                    onActivate: setActiveNode,
-                    onPreview,
-                    onToggleSelection: toggleCanvasArtifactSelection,
-                },
-            }));
+            .map((node) => {
+                const images = getNodeImageRefs(node, artifacts);
+                const isProminent = node.role === 'assistant' && images.some((image) => image.origin === 'output');
+                const layoutSize = isProminent
+                    ? { width: CANVAS_NODE_WIDTH, height: CANVAS_NODE_HEIGHT }
+                    : {
+                        width: COMPACT_NODE_WIDTH,
+                        height: images.length > 0 ? COMPACT_IMAGE_NODE_HEIGHT : COMPACT_NODE_HEIGHT,
+                    };
+
+                return {
+                    id: node.id,
+                    type: 'canvasTurn',
+                    position: { x: 0, y: 0 },
+                    data: {
+                        node,
+                        images,
+                        isProminent,
+                        isActive: node.id === activeNodeId,
+                        isOnActivePath: activePathIds.has(node.id),
+                        selectedArtifactIds: canvasSelectedArtifactIds,
+                        onActivate: setActiveNode,
+                        onPreview,
+                        onToggleSelection: toggleCanvasArtifactSelection,
+                        layoutSize,
+                    },
+                };
+            });
 
         const rawEdges: Edge[] = Object.values(storeNodes).flatMap((node) => {
             const parentIds = node.parentIds && node.parentIds.length > 0
