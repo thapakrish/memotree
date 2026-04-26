@@ -12,6 +12,7 @@ import { ImportSuggestionsModal } from './ImportSuggestionsModal';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ContextInspector } from './ContextInspector';
 import { featureFlags, isImageOnlyAttachmentMode } from '../config/featureFlags';
+import { buildImageArtifactFileName, buildImageArtifactPath } from '../lib/artifactFiles';
 import logoMark from '../assets/logo-mark.svg';
 
 function getTextSummary(text: string): string {
@@ -42,12 +43,16 @@ function describeAttachment(attachment: AttachmentPart): string {
 }
 
 function createAttachmentFromArtifact(artifact: ImageArtifact): AttachmentPart {
+    const artifactId = artifact.artifactId ?? artifact.id;
+    const name = buildImageArtifactFileName(artifactId, artifact.mimeType, artifact.label);
     return {
         id: crypto.randomUUID(),
         kind: 'image',
         mimeType: artifact.mimeType,
         data: artifact.data,
-        name: artifact.label ?? `generated-${artifact.id.slice(0, 8)}.${artifact.mimeType.split('/')[1] ?? 'png'}`,
+        artifactId,
+        artifactPath: artifact.artifactPath ?? buildImageArtifactPath(artifactId, name),
+        name,
         sizeBytes: Math.floor(artifact.data.length * 0.75),
         sourceType: 'generated',
     };

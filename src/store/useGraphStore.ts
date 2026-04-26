@@ -1,8 +1,11 @@
 import { create } from 'zustand';
 import type { ProviderId } from '../lib/providers';
 import type {
+    AttachmentPart,
+    ChatEvent,
     CompactionBlock,
     ContextGroup,
+    ImageFileArtifact,
     ImportedTurn,
     ImportSourcePlatform,
     ImportMode,
@@ -11,6 +14,7 @@ import type {
     MemoryPatch,
     StructureSuggestion,
 } from './types';
+import { buildImageArtifactFileName, buildImageArtifactPath } from '../lib/artifactFiles';
 import { deriveSessionTitle, loadLastSession, loadSession, markLastSession, saveSession, type PersistedSession, validatePersistedSession } from '../lib/sessionPersistence';
 import { applyAcceptedStructureSuggestions } from '../lib/import/applyStructureSuggestions';
 import { inferStructureRules } from '../lib/import/inferStructureRules';
@@ -138,6 +142,114 @@ function buildPreviewImportState(
         previewNodes: applied.nodes,
         previewImportEnvelope: applied.importEnvelope ?? null,
     };
+}
+
+function createImageArtifactRecordFromAttachment(
+    attachment: AttachmentPart,
+    nodeId: string,
+    timestamp: string,
+): { attachment: AttachmentPart; artifact: ImageFileArtifact } {
+    const artifactId = attachment.artifactId ?? crypto.randomUUID();
+    const name = attachment.name ?? buildImageArtifactFileName(artifactId, attachment.mimeType as ImageFileArtifact['mimeType']);
+    const path = attachment.artifactPath ?? buildImageArtifactPath(artifactId, name);
+
+    return {
+        attachment: {
+            ...attachment,
+            artifactId,
+            artifactPath: path,
+            name,
+        },
+        artifact: {
+            id: artifactId,
+            kind: 'image',
+            path,
+            mimeType: attachment.mimeType as ImageFileArtifact['mimeType'],
+            data: attachment.data,
+            name,
+            sizeBytes: attachment.sizeBytes ?? Math.floor(attachment.data.length * 0.75),
+            origin: attachment.sourceType === 'generated' ? 'generated' : 'upload',
+            createdAt: timestamp,
+            sourceNodeId: nodeId,
+            sourceAttachmentId: attachment.id,
+        },
+    };
+}
+
+function createImageArtifactRecordFromEvent(
+    event: Extract<ChatEvent, { kind: 'image_artifact' }>,
+    nodeId: string,
+    timestamp: string,
+): { event: ChatEvent; artifact: ImageFileArtifact } {
+    const artifactId = event.artifact.artifactId ?? event.artifact.id;
+    const name = buildImageArtifactFileName(artifactId, event.artifact.mimeType, event.artifact.label);
+    const path = event.artifact.artifactPath ?? buildImageArtifactPath(artifactId, name);
+
+    return {
+        event: {
+            ...event,
+            artifact: {
+                ...event.artifact,
+                artifactId,
+                artifactPath: path,
+            },
+        },
+        artifact: {
+            id: artifactId,
+            kind: 'image',
+            path,
+            mimeType: event.artifact.mimeType,
+            data: event.artifact.data,
+            name,
+            sizeBytes: Math.floor(event.artifact.data.length * 0.75),
+            origin: 'generated',
+            createdAt: timestamp,
+            sourceNodeId: nodeId,
+            sourceEventId: event.artifact.id,
+            model: event.artifact.model,
+            label: event.artifact.label,
+        },
+    };
+}
+
+function attachImageFileArtifactsToNode(
+    node: MessageNode,
+    existingArtifacts: Record<string, ImageFileArtifact>,
+): { node: MessageNode; artifacts: Record<string, ImageFileArtifact> } {
+    let nextNode = node;
+    const artifacts: Record<string, ImageFileArtifact> = {};
+
+    if ((node.attachments?.length ?? 0) > 0) {
+        const attachments = node.attachments!.map((attachment) => {
+            if (attachment.kind !== 'image') {
+                return attachment;
+            }
+
+            const result = createImageArtifactRecordFromAttachment(attachment, node.id, node.timestamp);
+            if (!existingArtifacts[result.artifact.id] && !artifacts[result.artifact.id]) {
+                artifacts[result.artifact.id] = result.artifact;
+            }
+            return result.attachment;
+        });
+        nextNode = { ...nextNode, attachments };
+    }
+
+    if ((node.events?.length ?? 0) > 0) {
+        const events = node.events!.map((event) => {
+            if (event.kind !== 'image_artifact') {
+                return event;
+            }
+
+            const result = createImageArtifactRecordFromEvent(event, node.id, node.timestamp);
+            if (!existingArtifacts[result.artifact.id] && !artifacts[result.artifact.id]) {
+                artifacts[result.artifact.id] = result.artifact;
+            }
+            return result.event;
+        });
+        nextNode = { ...nextNode, events };
+    }
+
+    return { node: nextNode, artifacts };
 }
 
 export const useGraphStore = create<GraphState>((set, get) => ({
@@ -508,16 +620,18 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     addNode: (nodeData) => {
         const id = crypto.randomUUID();
         const timestamp = new Date().toISOString();
-        const newNode: MessageNode = {
+        const baseNode: MessageNode = {
             ...nodeData,
             id,
             timestamp,
         };
 
         set((state) => {
+            const { node: newNode, artifacts } = attachImageFileArtifactsToNode(baseNode, state.artifacts);
             const isFirstNode = Object.keys(state.nodes).length === 0;
             return {
                 nodes: { ...state.nodes, [id]: newNode },
+                artifacts: { ...state.artifacts, ...artifacts },
                 rootId: isFirstNode ? id : state.rootId,
                 activeNodeId: id,
                 selectedNodeIds: [],
