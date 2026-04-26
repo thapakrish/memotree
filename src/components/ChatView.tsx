@@ -1,7 +1,7 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
-import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, FileText, Music, ScanText, ArrowRight, Sparkles, RotateCcw, Pencil } from 'lucide-react';
+import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, FileText, Music, ScanText, ArrowRight, Sparkles, RotateCcw, Pencil, Images } from 'lucide-react';
 import { useGraphStore } from '../store/useGraphStore';
-import type { AssistantResponseMode, AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, ImageArtifact, MessageNode } from '../store/types';
+import type { AssistantResponseMode, AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, ImageArtifact, ImageFileArtifact, MessageNode } from '../store/types';
 import { getAssistantText, interceptMemoryTool } from '../lib/geminiEngine';
 import type { IProvider, ProviderFunctionCall, StreamDelta } from '../lib/providers';
 import { createProvider } from '../lib/providers';
@@ -55,6 +55,21 @@ function createAttachmentFromArtifact(artifact: ImageArtifact): AttachmentPart {
         name,
         sizeBytes: Math.floor(artifact.data.length * 0.75),
         sourceType: 'generated',
+    };
+}
+
+function createAttachmentFromFileArtifact(artifact: ImageFileArtifact): AttachmentPart {
+    return {
+        id: crypto.randomUUID(),
+        kind: 'image',
+        mimeType: artifact.mimeType,
+        data: artifact.data,
+        artifactId: artifact.id,
+        artifactPath: artifact.path,
+        name: artifact.name,
+        sizeBytes: artifact.sizeBytes,
+        sourceType: artifact.origin === 'generated' ? 'generated' : 'file',
+        use: 'context',
     };
 }
 
@@ -479,6 +494,7 @@ export function ChatView() {
         compactions,
         addCompaction,
         removeCompaction,
+        artifacts,
     } = useGraphStore();
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
@@ -486,6 +502,8 @@ export function ChatView() {
     const [thoughtsTokenCount, setThoughtsTokenCount] = useState(0);
     const [isSessionsOpen, setIsSessionsOpen] = useState(false);
     const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
+    const [isArtifactPickerOpen, setIsArtifactPickerOpen] = useState(false);
+    const [selectedArtifactIds, setSelectedArtifactIds] = useState<string[]>([]);
     const [attachments, setAttachments] = useState<AttachmentPart[]>([]);
     const [responseMode, setResponseMode] = useState<AssistantResponseMode>('text');
     const [isDraggingOver, setIsDraggingOver] = useState(false);
@@ -519,6 +537,19 @@ export function ChatView() {
     const handleReuseArtifact = (artifact: ImageArtifact) => {
         addAttachments([createAttachmentFromArtifact(artifact)]);
         showStatus('info', 'Generated image added to the composer.');
+    };
+
+    const toggleSelectedArtifact = (artifactId: string) => {
+        setSelectedArtifactIds((prev) =>
+            prev.includes(artifactId)
+                ? prev.filter((id) => id !== artifactId)
+                : [...prev, artifactId],
+        );
+    };
+
+    const closeArtifactPicker = () => {
+        setSelectedArtifactIds([]);
+        setIsArtifactPickerOpen(false);
     };
 
     const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -587,6 +618,32 @@ export function ChatView() {
     };
 
     const path = getPath(activeNodeId);
+    const branchImageArtifacts = useMemo(() => {
+        const pathNodeIds = new Set(path.map((node) => node.id));
+        return Object.values(artifacts)
+            .filter((artifact) => !artifact.sourceNodeId || pathNodeIds.has(artifact.sourceNodeId))
+            .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    }, [artifacts, path]);
+    const attachedArtifactIds = useMemo(
+        () => new Set(attachments.flatMap((attachment) => attachment.artifactId ? [attachment.artifactId] : [])),
+        [attachments],
+    );
+
+    const handleAddSelectedArtifacts = () => {
+        const parts = selectedArtifactIds
+            .filter((artifactId) => !attachedArtifactIds.has(artifactId))
+            .map((artifactId) => artifacts[artifactId])
+            .filter((artifact): artifact is ImageFileArtifact => Boolean(artifact))
+            .map(createAttachmentFromFileArtifact);
+
+        if (parts.length > 0) {
+            addAttachments(parts);
+            showStatus('info', `${formatImageCountLabel(parts.length, 'input')} added to the composer.`);
+        }
+
+        closeArtifactPicker();
+    };
+
     const draftMemoryState = useMemo(() => reconstructMemory(path), [path]);
     const visibleImportEnvelope = previewImportEnvelope ?? importEnvelope;
     const acceptedSuggestionCount = visibleImportEnvelope?.suggestions?.filter((suggestion) => suggestion.status === 'accepted').length ?? 0;
@@ -1375,6 +1432,17 @@ export function ChatView() {
                             >
                                 <Paperclip className="w-4 h-4" />
                             </button>
+                            <button
+                                onClick={() => {
+                                    setSelectedArtifactIds([]);
+                                    setIsArtifactPickerOpen(true);
+                                }}
+                                disabled={isTyping || branchImageArtifacts.length === 0}
+                                className="shrink-0 p-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-500 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 disabled:opacity-50 transition-colors"
+                                title={branchImageArtifacts.length > 0 ? 'Select prior images' : 'No prior images on this branch'}
+                            >
+                                <Images className="w-4 h-4" />
+                            </button>
 
                             <textarea
                                 ref={textareaRef}
@@ -1439,6 +1507,88 @@ export function ChatView() {
                     </span>
                 </div>
             </div>
+            {isArtifactPickerOpen && (
+                <div
+                    className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/30 px-3 pb-3 backdrop-blur-sm sm:items-center sm:p-6"
+                    onClick={closeArtifactPicker}
+                >
+                    <div
+                        className="flex max-h-[88dvh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl"
+                        role="dialog"
+                        aria-modal="true"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                            <div>
+                                <h2 className="text-sm font-semibold text-slate-800">Branch Images</h2>
+                                <p className="text-xs text-slate-400">{branchImageArtifacts.length} available</p>
+                            </div>
+                            <button
+                                onClick={closeArtifactPicker}
+                                className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                                title="Close"
+                            >
+                                <X className="h-4 w-4" />
+                            </button>
+                        </div>
+                        <div className="grid min-h-0 grid-cols-2 gap-3 overflow-y-auto p-4 sm:grid-cols-3">
+                            {branchImageArtifacts.map((artifact) => {
+                                const isAttached = attachedArtifactIds.has(artifact.id);
+                                const isSelected = selectedArtifactIds.includes(artifact.id);
+
+                                return (
+                                    <button
+                                        key={artifact.id}
+                                        onClick={() => toggleSelectedArtifact(artifact.id)}
+                                        disabled={isAttached}
+                                        className={`group overflow-hidden rounded-lg border text-left transition-colors ${
+                                            isSelected
+                                                ? 'border-blue-400 bg-blue-50'
+                                                : 'border-slate-200 bg-white hover:border-blue-300'
+                                        } disabled:cursor-not-allowed disabled:opacity-60`}
+                                        title={artifact.path}
+                                    >
+                                        <img
+                                            src={`data:${artifact.mimeType};base64,${artifact.data}`}
+                                            alt={artifact.label ?? artifact.name}
+                                            className="aspect-square w-full bg-slate-50 object-cover"
+                                        />
+                                        <div className="space-y-1 px-2 py-2">
+                                            <div className="truncate text-xs font-medium text-slate-700">{artifact.label ?? artifact.name}</div>
+                                            <div className="flex items-center justify-between gap-2 text-[10px] text-slate-400">
+                                                <span className="truncate">{artifact.origin}</span>
+                                                <span className={isAttached || isSelected ? 'font-medium text-blue-600' : ''}>
+                                                    {isAttached ? 'Attached' : isSelected ? 'Selected' : 'Select'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3">
+                            <span className="text-xs font-medium text-slate-400">
+                                {selectedArtifactIds.length > 0 ? `${selectedArtifactIds.length} selected` : 'No selection'}
+                            </span>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={closeArtifactPicker}
+                                    className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleAddSelectedArtifacts}
+                                    disabled={selectedArtifactIds.length === 0}
+                                    className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Add
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
             <SessionsModal isOpen={isSessionsOpen} onClose={() => setIsSessionsOpen(false)} />
                 {featureFlags.importInference && (
                     <ImportSuggestionsModal isOpen={isSuggestionsOpen} onClose={() => setIsSuggestionsOpen(false)} />
