@@ -13,6 +13,8 @@ export type AttachmentMimeType =
 export type AttachmentKind = 'image' | 'pdf' | 'audio';
 export type AssistantResponseMode = 'text' | 'image' | 'multimodal';
 export type ImageArtifactMimeType = Extract<AttachmentMimeType, 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'>;
+export type ImageFileOrigin = 'upload' | 'generated';
+export type ImageFileUse = 'context' | 'edit_target';
 
 export interface AttachmentPart {
     id: string;
@@ -20,15 +22,39 @@ export interface AttachmentPart {
     mimeType: AttachmentMimeType;
     /** Base64-encoded file data (no data URL prefix). */
     data: string;
+    artifactId?: string;
+    artifactPath?: string;
     name?: string;
     sizeBytes?: number;
     sourceType: 'clipboard' | 'file' | 'drop' | 'generated';
+    use?: ImageFileUse;
 }
 
 export interface ImageArtifact {
     id: string;
     mimeType: ImageArtifactMimeType;
     data: string;
+    artifactId?: string;
+    artifactPath?: string;
+    model?: string;
+    label?: string;
+}
+
+export interface ImageFileArtifact {
+    id: string;
+    kind: 'image';
+    path: string;
+    mimeType: ImageArtifactMimeType;
+    /** Base64-encoded file data (no data URL prefix). Moves to blob storage in the next persistence step. */
+    data: string;
+    name: string;
+    sizeBytes?: number;
+    origin: ImageFileOrigin;
+    createdAt: string;
+    sourceNodeId?: string;
+    sourceEventId?: string;
+    sourceAttachmentId?: string;
+    parentArtifactIds?: string[];
     model?: string;
     label?: string;
 }
@@ -201,6 +227,7 @@ export interface MessageNode {
 
 export interface ConversationGraph {
     nodes: Record<string, MessageNode>;
+    artifacts: Record<string, ImageFileArtifact>;
     groups: Record<string, ContextGroup>;
     uiPositions: Record<string, GraphUiPosition>;
     compactions: Record<string, CompactionBlock>;

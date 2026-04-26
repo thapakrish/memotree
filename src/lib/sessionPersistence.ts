@@ -59,6 +59,10 @@ export function validatePersistedSession(data: unknown): PersistedSession {
         throw new Error('Session graph contains invalid nodes.');
     }
 
+    if ('artifacts' in graph && !isObject(graph.artifacts)) {
+        throw new Error('Session artifacts must be an object map.');
+    }
+
     if ('compactions' in graph && !isObject(graph.compactions)) {
         throw new Error('Session compactions must be an object map.');
     }

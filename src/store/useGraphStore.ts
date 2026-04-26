@@ -68,6 +68,7 @@ function createEmptySessionState() {
     const now = new Date().toISOString();
     return {
         nodes: {},
+        artifacts: {},
         groups: {},
         uiPositions: {},
         compactions: {},
@@ -151,6 +152,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         if (savedSession) {
             set({
                 ...savedSession.graph,
+                artifacts: savedSession.graph.artifacts ?? {},
                 groups: savedSession.graph.groups ?? {},
                 uiPositions: savedSession.graph.uiPositions ?? {},
                 compactions: savedSession.graph.compactions ?? {},
@@ -200,6 +202,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
         set({
             ...savedSession.graph,
+            artifacts: savedSession.graph.artifacts ?? {},
             groups: savedSession.graph.groups ?? {},
             uiPositions: savedSession.graph.uiPositions ?? {},
             compactions: savedSession.graph.compactions ?? {},
@@ -221,6 +224,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         await markLastSession(validatedSession.id);
         set({
             ...validatedSession.graph,
+            artifacts: validatedSession.graph.artifacts ?? {},
             groups: validatedSession.graph.groups ?? {},
             uiPositions: validatedSession.graph.uiPositions ?? {},
             compactions: validatedSession.graph.compactions ?? {},
@@ -285,6 +289,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
         set({
             nodes,
+            artifacts: {},
             groups: {},
             uiPositions: {},
             compactions: {},
@@ -650,6 +655,7 @@ useGraphStore.subscribe((state) => {
     const snapshot = JSON.stringify({
         sessionId: state.sessionId,
         nodes: state.nodes,
+        artifacts: state.artifacts,
         groups: state.groups,
         uiPositions: state.uiPositions,
         compactions: state.compactions,
@@ -672,6 +678,7 @@ useGraphStore.subscribe((state) => {
         updatedAt: new Date().toISOString(),
         title: state.sessionTitle?.trim() || deriveSessionTitle({
             nodes: state.nodes,
+            artifacts: state.artifacts,
             groups: state.groups,
             uiPositions: state.uiPositions,
             compactions: state.compactions,
@@ -683,6 +690,7 @@ useGraphStore.subscribe((state) => {
         }),
         graph: {
             nodes: state.nodes,
+            artifacts: state.artifacts,
             groups: state.groups,
             uiPositions: state.uiPositions,
             compactions: state.compactions,
