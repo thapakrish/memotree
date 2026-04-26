@@ -26,6 +26,7 @@ interface GraphState extends ConversationGraph {
     createdAt: string;
     isHydrated: boolean;
     selectedNodeIds: string[];
+    canvasSelectedArtifactIds: string[];
     previewNodes: Record<string, MessageNode> | null;
     previewImportEnvelope: GraphState['importEnvelope'] | null;
     lastImportApplySnapshot: Pick<ConversationGraph, 'nodes' | 'importEnvelope' | 'uiPositions'> | null;
@@ -50,6 +51,9 @@ interface GraphState extends ConversationGraph {
     toggleNodeSelection: (id: string) => void;
     setSelectedNodeIds: (ids: string[]) => void;
     clearNodeSelection: () => void;
+    toggleCanvasArtifactSelection: (id: string) => void;
+    setCanvasArtifactSelection: (ids: string[]) => void;
+    clearCanvasArtifactSelection: () => void;
     addCompaction: (block: CompactionBlock) => void;
     removeCompaction: (id: string) => void;
     createGroup: (group: Omit<ContextGroup, 'id'>) => string;
@@ -323,6 +327,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
     isHydrated: false,
     selectedNodeIds: [],
+    canvasSelectedArtifactIds: [],
 
     hydrateSession: async () => {
         const savedSession = await loadLastSession();
@@ -340,6 +345,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 createdAt: savedSession.createdAt,
                 apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
                 isHydrated: true,
+                canvasSelectedArtifactIds: [],
                 previewNodes: null,
                 previewImportEnvelope: null,
                 lastImportApplySnapshot: null,
@@ -352,6 +358,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             ...emptyState,
             apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
             isHydrated: true,
+            canvasSelectedArtifactIds: [],
             previewNodes: null,
             previewImportEnvelope: null,
             lastImportApplySnapshot: null,
@@ -367,6 +374,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             providerId: get().providerId,
             isHydrated: true,
             selectedNodeIds: [],
+            canvasSelectedArtifactIds: [],
         });
     },
 
@@ -391,6 +399,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             apiKey: get().apiKey,
             isHydrated: true,
             selectedNodeIds: [],
+            canvasSelectedArtifactIds: [],
             previewNodes: null,
             previewImportEnvelope: null,
             lastImportApplySnapshot: null,
@@ -413,6 +422,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             apiKey: get().apiKey,
             isHydrated: true,
             selectedNodeIds: [],
+            canvasSelectedArtifactIds: [],
             previewNodes: null,
             previewImportEnvelope: null,
             lastImportApplySnapshot: null,
@@ -498,6 +508,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             apiKey: get().apiKey,
             isHydrated: true,
             selectedNodeIds: [],
+            canvasSelectedArtifactIds: [],
             previewNodes: null,
             previewImportEnvelope: null,
             lastImportApplySnapshot: null,
@@ -648,6 +659,19 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     }),
 
     clearNodeSelection: () => set({ selectedNodeIds: [] }),
+
+    toggleCanvasArtifactSelection: (id) => set((state) => {
+        const exists = state.canvasSelectedArtifactIds.includes(id);
+        return {
+            canvasSelectedArtifactIds: exists
+                ? state.canvasSelectedArtifactIds.filter((artifactId) => artifactId !== id)
+                : [...state.canvasSelectedArtifactIds, id],
+        };
+    }),
+
+    setCanvasArtifactSelection: (ids) => set({ canvasSelectedArtifactIds: [...new Set(ids)] }),
+
+    clearCanvasArtifactSelection: () => set({ canvasSelectedArtifactIds: [] }),
 
     createGroup: (groupData) => {
         const id = crypto.randomUUID();
