@@ -102,6 +102,29 @@ function createAttachmentsFromArtifacts(
         .map((artifact) => createAttachmentFromFileArtifact(artifact, use));
 }
 
+function hasEditTargetImage(attachments?: AttachmentPart[]): boolean {
+    return (attachments ?? []).some((attachment) => attachment.kind === 'image' && attachment.use === 'edit_target');
+}
+
+function getEffectiveResponseMode(
+    requestedMode: AssistantResponseMode,
+    attachments: AttachmentPart[],
+): AssistantResponseMode {
+    return requestedMode === 'text' && hasEditTargetImage(attachments) ? 'image' : requestedMode;
+}
+
+function shouldUseFocusedImageEditRequest(
+    node: MessageNode | undefined,
+    responseMode: AssistantResponseMode,
+): node is MessageNode {
+    return Boolean(
+        node
+        && node.role === 'user'
+        && responseMode !== 'text'
+        && hasEditTargetImage(node.attachments),
+    );
+}
+
 function buildBranchMarkdown(path: MessageNode[]): string {
     return path.map((node) => {
         const title = node.role === 'user'
@@ -811,8 +834,7 @@ export function ChatView() {
             return null;
         }
 
-        const hasEditTarget = draftAttachments.some((attachment) => attachment.kind === 'image' && attachment.use === 'edit_target');
-        const estimatedResponseMode = responseMode === 'text' && hasEditTarget ? 'multimodal' : responseMode;
+        const estimatedResponseMode = getEffectiveResponseMode(responseMode, draftAttachments);
         const providerEstimate = provider.estimateContext(draftMemoryState, draftAttachments, { responseMode: estimatedResponseMode });
         const conversationTokens = path.reduce((sum, node) => {
             const eventTextLength = (node.events ?? []).reduce((eventSum, event) =>
@@ -913,12 +935,15 @@ export function ChatView() {
 
         try {
             const newPath = getPath(userNodeId);
-            const requestPath = await hydratePathImageAttachments(newPath);
-            const memoryState = reconstructMemory(requestPath);
-            const lastNode = requestPath[requestPath.length - 1];
+            const hydratedPath = await hydratePathImageAttachments(newPath);
+            const memoryState = reconstructMemory(hydratedPath);
+            const lastNode = hydratedPath[hydratedPath.length - 1];
             const requestedResponseMode = lastNode?.responseMode ?? 'text';
+            const isFocusedImageEdit = shouldUseFocusedImageEditRequest(lastNode, requestedResponseMode);
+            const requestPath = isFocusedImageEdit ? [lastNode] : hydratedPath;
+            const requestCompactions = isFocusedImageEdit ? {} : compactions;
             const initialDelta = await collectProviderStream(
-                provider.stream(requestPath, memoryState, compactions, controller.signal, { responseMode: requestedResponseMode }),
+                provider.stream(requestPath, memoryState, requestCompactions, controller.signal, { responseMode: requestedResponseMode }),
                 setStreamingEvents,
                 setThoughtsTokenCount,
             );
@@ -995,7 +1020,7 @@ export function ChatView() {
 
                 const followUpDelta = await collectProviderStream(
                     provider.continueWithToolResults(
-                        requestPath, compactions, events, pendingFunctionCalls,
+                        requestPath, requestCompactions, events, pendingFunctionCalls,
                         functionResponses, nextMemoryState, controller.signal, { responseMode: requestedResponseMode },
                     ),
                     setStreamingEvents,
@@ -1054,8 +1079,7 @@ export function ChatView() {
         const parentId = activeNode?.role === 'user' ? activeNode.parentId : activeNodeId;
         const nextInput = input;
         let nextAttachments: AttachmentPart[];
-        const hasEditTarget = draftAttachments.some((attachment) => attachment.kind === 'image' && attachment.use === 'edit_target');
-        const requestedResponseMode = responseMode === 'text' && hasEditTarget ? 'multimodal' : responseMode;
+        const requestedResponseMode = getEffectiveResponseMode(responseMode, draftAttachments);
 
         try {
             nextAttachments = await Promise.all(draftAttachments.map(resolveAttachmentData));

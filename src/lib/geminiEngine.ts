@@ -18,8 +18,8 @@ import { stripGeneratedImagePlaceholders } from './generatedImagePlaceholders';
 
 let geminiClient: GoogleGenAI | null = null;
 let activeApiKey: string | null = null;
-const TEXT_RESPONSE_MODEL = 'gemini-2.5-flash';
-const IMAGE_RESPONSE_MODEL = 'gemini-2.5-flash-image';
+const TEXT_RESPONSE_MODEL = import.meta.env.VITE_GEMINI_TEXT_MODEL?.trim() || 'gemini-2.5-flash';
+const IMAGE_RESPONSE_MODEL = import.meta.env.VITE_GEMINI_IMAGE_MODEL?.trim() || 'gemini-3.1-flash-image-preview';
 
 export const initGemini = (apiKey: string) => {
     if (!geminiClient || activeApiKey !== apiKey) {
@@ -184,9 +184,30 @@ function describeAttachmentForModel(attachment: AttachmentPart, index: number): 
     return `[attached_file ${index + 1}] kind=${attachment.kind}; role=${role}; ref=${fileRef}; mime=${attachment.mimeType}\n${guidance}`;
 }
 
+function hasEditTargetAttachment(attachments?: AttachmentPart[]): boolean {
+    return (attachments ?? []).some((attachment) => attachment.kind === 'image' && attachment.use === 'edit_target');
+}
+
+function formatUserTextForModel(text: string, attachments?: AttachmentPart[]): string {
+    const userText = text.trim();
+    if (!hasEditTargetAttachment(attachments)) {
+        return userText;
+    }
+
+    return [
+        '[image_edit_request]',
+        'Use the attached role=edit_target image file(s) as the source image(s) to edit.',
+        'Preserve composition, subject identity, pose, background, camera angle, crop, lighting, style, and all unmentioned visual details.',
+        'Apply only the user-requested change. Do not replace the subject, change the scene, or generate a different image.',
+        'Return image output. If multiple edit targets are attached, return separate edited images unless the user asks to combine them.',
+        `User instruction: ${userText || 'Edit the attached target image.'}`,
+        '[/image_edit_request]',
+    ].join('\n');
+}
+
 function toModelParts(node: MessageNode): Part[] {
     if (node.role !== 'assistant') {
-        const parts: Part[] = [{ text: node.content }];
+        const parts: Part[] = [{ text: formatUserTextForModel(node.content, node.attachments) }];
         for (const [index, att] of (node.attachments ?? []).entries()) {
             parts.push({ text: describeAttachmentForModel(att, index) });
             if (att.data) {
@@ -272,7 +293,7 @@ function buildPendingDraftContent(
 
     const parts: Part[] = [];
     if (hasText) {
-        parts.push({ text: pendingText!.trim() });
+        parts.push({ text: formatUserTextForModel(pendingText!, pendingAttachments) });
     }
     for (const [index, attachment] of (pendingAttachments ?? []).entries()) {
         parts.push({ text: describeAttachmentForModel(attachment, index) });
