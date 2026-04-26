@@ -178,7 +178,10 @@ function describeAttachmentForModel(attachment: AttachmentPart, index: number): 
         ? 'edit_target'
         : 'context';
     const fileRef = attachment.artifactPath ?? attachment.artifactId ?? attachment.name ?? attachment.id;
-    return `[attached_file ${index + 1}] kind=${attachment.kind}; role=${role}; ref=${fileRef}; mime=${attachment.mimeType}`;
+    const guidance = role === 'edit_target'
+        ? 'Use this image as the visual edit target. Preserve every unmentioned visual detail and return the edited image.'
+        : 'Use this file as reference context for the user request.';
+    return `[attached_file ${index + 1}] kind=${attachment.kind}; role=${role}; ref=${fileRef}; mime=${attachment.mimeType}\n${guidance}`;
 }
 
 function toModelParts(node: MessageNode): Part[] {
@@ -405,7 +408,7 @@ export async function compactPathNodes(
 export function buildSystemInstruction(memoryState: string, requestConfig?: ProviderRequestConfig): string {
     return `You are MemoTree AI.
 ${isImageResponseMode(requestConfig)
-        ? 'This turn may generate or edit images. Use the active branch context and any attached images precisely.'
+        ? 'This turn may generate or edit images. Use the active branch context and any attached images precisely. If an attached file is marked role=edit_target, produce an image output that edits that target rather than replying with text only.'
         : 'You have access to a text_editor tool to save long-term facts in /memories/.'}
 <memory_files>
 /memories/facts.json:

@@ -89,6 +89,19 @@ function formatImageCountLabel(count: number, noun: 'input' | 'output'): string 
     return `${count} image ${noun}${count === 1 ? '' : 's'}`;
 }
 
+function createAttachmentsFromArtifacts(
+    artifactIds: string[],
+    artifacts: Record<string, ImageFileArtifact>,
+    attachedArtifactIds: Set<string>,
+    use: AttachmentPart['use'],
+): AttachmentPart[] {
+    return artifactIds
+        .filter((artifactId) => !attachedArtifactIds.has(artifactId))
+        .map((artifactId) => artifacts[artifactId])
+        .filter((artifact): artifact is ImageFileArtifact => Boolean(artifact))
+        .map((artifact) => createAttachmentFromFileArtifact(artifact, use));
+}
+
 function buildBranchMarkdown(path: MessageNode[]): string {
     return path.map((node) => {
         const title = node.role === 'user'
@@ -751,6 +764,10 @@ export function ChatView() {
         () => new Set(attachments.flatMap((attachment) => attachment.artifactId ? [attachment.artifactId] : [])),
         [attachments],
     );
+    const selectedCanvasDraftAttachments = useMemo(
+        () => createAttachmentsFromArtifacts(canvasSelectedArtifactIds, artifacts, attachedArtifactIds, 'edit_target'),
+        [artifacts, attachedArtifactIds, canvasSelectedArtifactIds],
+    );
 
     const handleAddSelectedArtifacts = () => {
         const parts = selectedArtifactIds
@@ -768,11 +785,7 @@ export function ChatView() {
     };
 
     const handleAddCanvasArtifacts = (use: AttachmentPart['use']) => {
-        const parts = canvasSelectedArtifactIds
-            .filter((artifactId) => !attachedArtifactIds.has(artifactId))
-            .map((artifactId) => artifacts[artifactId])
-            .filter((artifact): artifact is ImageFileArtifact => Boolean(artifact))
-            .map((artifact) => createAttachmentFromFileArtifact(artifact, use));
+        const parts = createAttachmentsFromArtifacts(canvasSelectedArtifactIds, artifacts, attachedArtifactIds, use);
 
         if (parts.length === 0) {
             showStatus('info', 'Selected canvas images are already attached.');
@@ -793,11 +806,14 @@ export function ChatView() {
     const acceptedSuggestionCount = visibleImportEnvelope?.suggestions?.filter((suggestion) => suggestion.status === 'accepted').length ?? 0;
     const pendingSuggestionCount = visibleImportEnvelope?.suggestions?.filter((suggestion) => suggestion.status !== 'accepted' && suggestion.status !== 'rejected').length ?? 0;
     const composerEstimate = useMemo(() => {
-        if (!provider || (!input.trim() && attachments.length === 0)) {
+        const draftAttachments = [...attachments, ...selectedCanvasDraftAttachments];
+        if (!provider || (!input.trim() && draftAttachments.length === 0)) {
             return null;
         }
 
-        const providerEstimate = provider.estimateContext(draftMemoryState, attachments, { responseMode });
+        const hasEditTarget = draftAttachments.some((attachment) => attachment.kind === 'image' && attachment.use === 'edit_target');
+        const estimatedResponseMode = responseMode === 'text' && hasEditTarget ? 'multimodal' : responseMode;
+        const providerEstimate = provider.estimateContext(draftMemoryState, draftAttachments, { responseMode: estimatedResponseMode });
         const conversationTokens = path.reduce((sum, node) => {
             const eventTextLength = (node.events ?? []).reduce((eventSum, event) =>
                 eventSum + ('text' in event ? event.text.length : 0), 0);
@@ -811,7 +827,7 @@ export function ChatView() {
             + providerEstimate.attachmentTokens
             + conversationTokens
             + draftTokens;
-    }, [attachments, draftMemoryState, input, path, provider, responseMode]);
+    }, [attachments, draftMemoryState, input, path, provider, responseMode, selectedCanvasDraftAttachments]);
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -1031,15 +1047,18 @@ export function ChatView() {
     };
 
     const handleSend = async () => {
-        if ((!input.trim() && attachments.length === 0) || !provider) return;
+        const draftAttachments = [...attachments, ...selectedCanvasDraftAttachments];
+        if ((!input.trim() && draftAttachments.length === 0) || !provider) return;
 
         const activeNode = path.length > 0 ? path[path.length - 1] : null;
         const parentId = activeNode?.role === 'user' ? activeNode.parentId : activeNodeId;
         const nextInput = input;
         let nextAttachments: AttachmentPart[];
+        const hasEditTarget = draftAttachments.some((attachment) => attachment.kind === 'image' && attachment.use === 'edit_target');
+        const requestedResponseMode = responseMode === 'text' && hasEditTarget ? 'multimodal' : responseMode;
 
         try {
-            nextAttachments = await Promise.all(attachments.map(resolveAttachmentData));
+            nextAttachments = await Promise.all(draftAttachments.map(resolveAttachmentData));
         } catch (error) {
             console.error('Image artifact load failed:', error);
             showStatus('error', 'Unable to load one of the selected image files.');
@@ -1056,14 +1075,18 @@ export function ChatView() {
             parentId,
             role: 'user',
             content: nextInput,
-            responseMode,
+            responseMode: requestedResponseMode,
             attachments: nextAttachments.length > 0 ? nextAttachments : undefined,
             memoryPatches: [],
-            summary: nextInput.trim() ? getTextSummary(nextInput) : `Image request (${responseMode})`,
+            summary: nextInput.trim() ? getTextSummary(nextInput) : `Image request (${requestedResponseMode})`,
         });
 
         setInput('');
         setAttachments([]);
+        clearCanvasArtifactSelection();
+        if (requestedResponseMode !== responseMode) {
+            setResponseMode(requestedResponseMode);
+        }
         await generateAssistantReply(userNodeId);
         void persistNodeImageArtifacts(userNodeId);
     };
@@ -1516,7 +1539,7 @@ export function ChatView() {
                                 <div className="flex min-w-0 flex-1 items-center gap-2 text-xs font-medium text-blue-800">
                                     <Images className="h-3.5 w-3.5 shrink-0" />
                                     <span className="truncate">
-                                        {canvasSelectedArtifactIds.length} canvas image{canvasSelectedArtifactIds.length === 1 ? '' : 's'} selected
+                                        {canvasSelectedArtifactIds.length} canvas image{canvasSelectedArtifactIds.length === 1 ? '' : 's'} selected - next send uses as edit target
                                     </span>
                                 </div>
                                 <button
@@ -1707,7 +1730,7 @@ export function ChatView() {
                                     )}
                                     <button
                                         onClick={handleSend}
-                                        disabled={!input.trim() && attachments.length === 0}
+                                        disabled={!input.trim() && attachments.length === 0 && selectedCanvasDraftAttachments.length === 0}
                                         className="shrink-0 p-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors shadow-sm"
                                         title={composerEstimate !== null ? `Estimated next request size: ~${composerEstimate.toLocaleString()} tokens` : 'Send message'}
                                     >
