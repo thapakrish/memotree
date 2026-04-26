@@ -6,45 +6,32 @@ import {
     Position,
     ReactFlow,
     ReactFlowProvider,
+    useReactFlow,
     type Edge,
     type Node,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Check, ImageIcon, Maximize2, MessageSquare, Sparkles, X } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
-import { getFinalAnswerText, getImageArtifacts } from '../lib/chatEvents';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { getImageArtifacts } from '../lib/chatEvents';
 import { getImageSource } from '../lib/artifactStorage';
 import type { AttachmentPart, ImageFileArtifact, MessageNode } from '../store/types';
 import { useGraphStore } from '../store/useGraphStore';
 
-const IMAGE_NODE_WIDTH = 360;
-const IMAGE_NODE_HEIGHT = 330;
-const OPERATION_NODE_WIDTH = 260;
-const MIN_ROW_HEIGHT = 420;
+const IMAGE_NODE_WIDTH = 520;
+const IMAGE_NODE_HEIGHT = 450;
+const IMAGE_PREVIEW_HEIGHT = 360;
+const OPERATION_NODE_WIDTH = 320;
+const MIN_ROW_HEIGHT = 560;
+const INPUT_X = 64;
+const OPERATION_X = 680;
+const OUTPUT_X = 1088;
 
 function formatBytes(bytes?: number): string {
     if (!bytes) return '';
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function truncateText(text: string, maxLength: number): string {
-    const trimmed = text.replace(/\s+/g, ' ').trim();
-    if (trimmed.length <= maxLength) {
-        return trimmed;
-    }
-    return `${trimmed.slice(0, maxLength - 1)}…`;
-}
-
-function getNodeText(node?: MessageNode): string {
-    if (!node) {
-        return '';
-    }
-    if (node.role === 'assistant') {
-        return getFinalAnswerText(node.events) || node.content;
-    }
-    return node.content;
 }
 
 function getImageArtifactIdFromAttachment(attachment: AttachmentPart): string | null {
@@ -62,8 +49,8 @@ interface ImageNodeData {
 
 interface OperationNodeData {
     title: string;
-    prompt: string;
-    response: string;
+    inputCount: number;
+    outputCount: number;
     isActive: boolean;
     onActivate: () => void;
 }
@@ -83,17 +70,26 @@ function ImageArtifactNode({ data }: ImageArtifactNodeProps) {
             style={{ width: IMAGE_NODE_WIDTH }}
         >
             <Handle type="target" position={Position.Left} className="h-3 w-3 border-slate-950 bg-blue-400" />
-            <div className="relative flex h-[250px] items-center justify-center bg-slate-950">
-                {data.imageSource ? (
-                    <img
-                        src={data.imageSource}
-                        alt={data.label}
-                        className="max-h-full max-w-full object-contain"
-                        loading="lazy"
-                    />
-                ) : (
-                    <ImageIcon className="h-10 w-10 text-slate-600" />
-                )}
+            <div className="relative bg-slate-950" style={{ height: IMAGE_PREVIEW_HEIGHT }}>
+                <button
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        data.onPreview(data.artifact.id);
+                    }}
+                    className="flex h-full w-full cursor-zoom-in items-center justify-center"
+                    title="Open large preview"
+                >
+                    {data.imageSource ? (
+                        <img
+                            src={data.imageSource}
+                            alt={data.label}
+                            className="max-h-full max-w-full object-contain"
+                            loading="lazy"
+                        />
+                    ) : (
+                        <ImageIcon className="h-10 w-10 text-slate-600" />
+                    )}
+                </button>
                 <div className="absolute right-2 top-2 flex gap-1.5">
                     <button
                         onClick={(event) => {
@@ -120,14 +116,16 @@ function ImageArtifactNode({ data }: ImageArtifactNodeProps) {
                         <Maximize2 className="h-4 w-4" />
                     </button>
                 </div>
+                <div className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-slate-950/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 opacity-0 transition-opacity group-hover:opacity-100">
+                    Click to preview
+                </div>
             </div>
-            <div className="space-y-1 border-t border-slate-800 px-3 py-2">
+            <div className="space-y-1 border-t border-slate-800 px-3 py-3">
                 <div className="truncate text-sm font-semibold text-slate-100">{data.label}</div>
                 <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
                     <span className="truncate">{data.artifact.origin}</span>
                     <span>{formatBytes(data.artifact.sizeBytes) || data.artifact.mimeType}</span>
                 </div>
-                <div className="truncate text-[10px] text-slate-600">{data.artifact.path}</div>
             </div>
             <Handle type="source" position={Position.Right} className="h-3 w-3 border-slate-950 bg-blue-400" />
         </div>
@@ -145,30 +143,25 @@ function OperationNode({ data }: OperationNodeProps) {
                 event.stopPropagation();
                 data.onActivate();
             }}
-            className={`rounded-lg border bg-white p-3 text-left shadow-lg transition-colors ${
+            className={`rounded-lg border p-3 text-left shadow-lg transition-colors ${
                 data.isActive
-                    ? 'border-blue-500 ring-2 ring-blue-300'
-                    : 'border-slate-200 hover:border-blue-300'
+                    ? 'border-blue-400 bg-blue-950 text-blue-50 ring-2 ring-blue-500/40'
+                    : 'border-slate-700 bg-slate-900 text-slate-100 hover:border-blue-400'
             }`}
             style={{ width: OPERATION_NODE_WIDTH }}
             title="Set active checkpoint"
         >
-            <Handle type="target" position={Position.Left} className="h-3 w-3 bg-slate-400" />
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500">
-                <Sparkles className="h-3.5 w-3.5 text-blue-500" />
+            <Handle type="target" position={Position.Left} className="h-3 w-3 bg-blue-400" />
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-blue-300">
+                <Sparkles className="h-3.5 w-3.5" />
                 <span>{data.title}</span>
             </div>
-            {data.prompt && (
-                <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-slate-800">
-                    {data.prompt}
-                </p>
-            )}
-            {data.response && (
-                <p className="mt-2 line-clamp-2 border-t border-slate-100 pt-2 text-xs leading-relaxed text-slate-500">
-                    {data.response}
-                </p>
-            )}
-            <Handle type="source" position={Position.Right} className="h-3 w-3 bg-slate-400" />
+            <div className="mt-2 flex items-center gap-2 text-[11px] font-medium text-slate-400">
+                <span>{data.inputCount} in</span>
+                <span className="h-1 w-1 rounded-full bg-slate-600" />
+                <span>{data.outputCount} out</span>
+            </div>
+            <Handle type="source" position={Position.Right} className="h-3 w-3 bg-blue-400" />
         </button>
     );
 }
@@ -215,6 +208,7 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
         toggleCanvasArtifactSelection,
         clearCanvasArtifactSelection,
     } = useGraphStore();
+    const { setCenter } = useReactFlow();
 
     const path = getPath(activeNodeId);
     const selectedCount = canvasSelectedArtifactIds.filter((id) => artifacts[id]).length;
@@ -229,7 +223,6 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
         const renderedImageIds = new Set<string>();
         const turns = buildTurnPairs(path);
         let yOffset = 0;
-        let previousOperationId: string | null = null;
 
         const addImageNode = (artifact: ImageFileArtifact, x: number, y: number) => {
             if (renderedImageIds.has(artifact.id)) {
@@ -252,8 +245,6 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
         };
 
         turns.forEach((turn, turnIndex) => {
-            const userText = getNodeText(turn.userNode);
-            const responseText = getNodeText(turn.assistantNode);
             const operationSourceNode = turn.assistantNode ?? turn.userNode;
             if (!operationSourceNode) {
                 return;
@@ -277,51 +268,28 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
             nodes.push({
                 id: operationId,
                 type: 'operation',
-                position: { x: 540, y: rowCenter },
+                position: { x: OPERATION_X, y: rowCenter },
                 data: {
                     title: `Turn ${turnIndex + 1}`,
-                    prompt: truncateText(userText, 190),
-                    response: truncateText(responseText, 150),
+                    inputCount: inputArtifacts.length,
+                    outputCount: outputArtifacts.length,
                     isActive: operationSourceNode.id === activeNodeId || turn.userNode?.id === activeNodeId,
                     onActivate: () => setActiveNode(operationSourceNode.id),
                 },
             });
 
-            if (previousOperationId) {
-                edges.push({
-                    id: `edge-${previousOperationId}-${operationId}`,
-                    source: previousOperationId,
-                    target: operationId,
-                    type: 'smoothstep',
-                    label: userText ? truncateText(userText, 90) : 'continue',
-                    labelShowBg: true,
-                    labelBgPadding: [8, 4],
-                    labelBgBorderRadius: 6,
-                    labelStyle: { fill: '#cbd5e1', fontWeight: 600, fontSize: 12 },
-                    labelBgStyle: { fill: '#0f172a', fillOpacity: 0.9 },
-                    style: { stroke: '#475569', strokeWidth: 2 },
-                    markerEnd: { type: MarkerType.ArrowClosed, color: '#475569' },
-                });
-            }
-
             inputArtifacts.forEach((artifact, inputIndex) => {
                 const imageY = rowTop + inputIndex * (IMAGE_NODE_HEIGHT + 36);
-                addImageNode(artifact, 60, imageY);
+                addImageNode(artifact, INPUT_X, imageY);
                 const attachment = turn.userNode?.attachments?.find((candidate) => candidate.artifactId === artifact.id);
                 edges.push({
                     id: `edge-image-${artifact.id}-${operationId}-${inputIndex}`,
                     source: `image-${artifact.id}`,
                     target: operationId,
                     type: 'smoothstep',
-                    label: attachment?.use === 'edit_target' ? 'edit target' : 'context',
-                    labelShowBg: true,
-                    labelBgPadding: [8, 4],
-                    labelBgBorderRadius: 6,
-                    labelStyle: { fill: '#bfdbfe', fontWeight: 700, fontSize: 12 },
-                    labelBgStyle: { fill: '#172554', fillOpacity: 0.9 },
                     style: {
                         stroke: attachment?.use === 'edit_target' ? '#f59e0b' : '#60a5fa',
-                        strokeWidth: 2.5,
+                        strokeWidth: 3,
                     },
                     markerEnd: {
                         type: MarkerType.ArrowClosed,
@@ -332,24 +300,17 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
 
             outputArtifacts.forEach((artifact, outputIndex) => {
                 const imageY = rowTop + outputIndex * (IMAGE_NODE_HEIGHT + 36);
-                addImageNode(artifact, 1040, imageY);
+                addImageNode(artifact, OUTPUT_X, imageY);
                 edges.push({
                     id: `edge-${operationId}-image-${artifact.id}-${outputIndex}`,
                     source: operationId,
                     target: `image-${artifact.id}`,
                     type: 'smoothstep',
-                    label: responseText ? truncateText(responseText, 90) : artifact.label ?? 'generated image',
-                    labelShowBg: true,
-                    labelBgPadding: [8, 4],
-                    labelBgBorderRadius: 6,
-                    labelStyle: { fill: '#f5d0fe', fontWeight: 700, fontSize: 12 },
-                    labelBgStyle: { fill: '#581c87', fillOpacity: 0.9 },
-                    style: { stroke: '#c084fc', strokeWidth: 2.5 },
+                    style: { stroke: '#c084fc', strokeWidth: 3 },
                     markerEnd: { type: MarkerType.ArrowClosed, color: '#c084fc' },
                 });
             });
 
-            previousOperationId = operationId;
             yOffset += rowHeight + 80;
         });
 
@@ -357,7 +318,7 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
             .filter((artifact) => !renderedImageIds.has(artifact.id))
             .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
             .forEach((artifact, index) => {
-                addImageNode(artifact, 1040, yOffset + index * (IMAGE_NODE_HEIGHT + 36));
+                addImageNode(artifact, OUTPUT_X, yOffset + index * (IMAGE_NODE_HEIGHT + 36));
             });
 
         return {
@@ -366,6 +327,20 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
             branchImageCount: branchImages.length,
         };
     }, [activeNodeId, artifacts, canvasSelectedArtifactIds, onPreview, path, setActiveNode, toggleCanvasArtifactSelection]);
+
+    useEffect(() => {
+        const activeOperation = flowNodes.find((node) =>
+            node.type === 'operation' && (node.data as unknown as OperationNodeData).isActive,
+        );
+        if (!activeOperation) {
+            return;
+        }
+
+        setCenter(activeOperation.position.x + 560, activeOperation.position.y + 170, {
+            zoom: 0.78,
+            duration: 450,
+        });
+    }, [flowNodes, setCenter]);
 
     return (
         <div className="flex h-full flex-col bg-slate-950 text-slate-100">
@@ -406,10 +381,9 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
                         nodes={flowNodes}
                         edges={flowEdges}
                         nodeTypes={nodeTypes}
-                        fitView
-                        fitViewOptions={{ padding: 0.18, maxZoom: 1 }}
+                        defaultViewport={{ x: 20, y: 80, zoom: 0.78 }}
                         minZoom={0.2}
-                        maxZoom={1.4}
+                        maxZoom={1.2}
                         nodesDraggable={false}
                         nodesConnectable={false}
                         elementsSelectable={false}
