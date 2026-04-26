@@ -114,13 +114,13 @@ function App() {
       </div>
 
       {/* ── Desktop layout (≥ md) ── */}
-      <div className="hidden h-screen w-screen overflow-hidden bg-slate-900 font-sans md:flex">
+      <div className="hidden h-screen w-screen overflow-hidden bg-slate-100 font-sans md:flex">
         {/* Pane A: Chat */}
         <div className="h-full w-[450px] shrink-0 overflow-hidden shadow-xl" style={{ zIndex: 10 }}>
           <ChatView />
         </div>
         {/* Pane B: Unified image/turn canvas */}
-        <div className="relative h-full flex-1 bg-slate-950">
+        <div className="relative h-full flex-1 bg-slate-50">
           <ImageCanvas />
         </div>
         {featureFlags.keyboardPowerTools && <CommandPalette />}

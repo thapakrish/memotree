@@ -13,12 +13,13 @@ export const getLayoutedElements = (
     edges: Edge[],
     direction = 'TB',
     savedPositions: Record<string, GraphUiPosition> = {},
+    nodeSize: { width: number; height: number } = { width: nodeWidth, height: nodeHeight },
 ) => {
     const isHorizontal = direction === 'LR';
     dagreGraph.setGraph({ rankdir: direction });
 
     nodes.forEach((node) => {
-        dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
+        dagreGraph.setNode(node.id, { width: nodeSize.width, height: nodeSize.height });
     });
 
     edges.forEach((edge) => {
@@ -36,8 +37,8 @@ export const getLayoutedElements = (
             // We are shifting the dagre node position (anchor=center center) to the top left
             // so it matches the React Flow node anchor point (top left).
             position: savedPositions[node.id] ?? {
-                x: nodeWithPosition.x - nodeWidth / 2,
-                y: nodeWithPosition.y - nodeHeight / 2,
+                x: nodeWithPosition.x - nodeSize.width / 2,
+                y: nodeWithPosition.y - nodeSize.height / 2,
             },
         };
 

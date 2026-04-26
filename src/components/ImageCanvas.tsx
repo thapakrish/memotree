@@ -6,26 +6,21 @@ import {
     Position,
     ReactFlow,
     ReactFlowProvider,
-    useReactFlow,
     type Edge,
     type Node,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Check, ImageIcon, Maximize2, MessageSquare, Sparkles, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { getImageArtifacts } from '../lib/chatEvents';
 import { getImageSource } from '../lib/artifactStorage';
+import { getLayoutedElements } from '../lib/layout';
 import type { AttachmentPart, ImageFileArtifact, MessageNode } from '../store/types';
 import { useGraphStore } from '../store/useGraphStore';
 
-const IMAGE_NODE_WIDTH = 520;
-const IMAGE_NODE_HEIGHT = 450;
-const IMAGE_PREVIEW_HEIGHT = 360;
-const OPERATION_NODE_WIDTH = 320;
-const MIN_ROW_HEIGHT = 560;
-const INPUT_X = 64;
-const OPERATION_X = 680;
-const OUTPUT_X = 1088;
+const CANVAS_NODE_WIDTH = 390;
+const CANVAS_NODE_HEIGHT = 330;
 
 function formatBytes(bytes?: number): string {
     if (!bytes) return '';
@@ -34,165 +29,184 @@ function formatBytes(bytes?: number): string {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function getImageArtifactIdFromAttachment(attachment: AttachmentPart): string | null {
-    return attachment.kind === 'image' && attachment.artifactId ? attachment.artifactId : null;
+function getRoleLabel(role: MessageNode['role']): string {
+    if (role === 'assistant') return 'Gemini';
+    if (role === 'user') return 'You';
+    return 'System';
 }
 
-interface ImageNodeData {
+interface CanvasImageRef {
     artifact: ImageFileArtifact;
-    imageSource: string;
-    label: string;
-    isSelected: boolean;
+    use?: AttachmentPart['use'];
+    origin: 'input' | 'output';
+}
+
+function getNodeImageRefs(
+    node: MessageNode,
+    artifacts: Record<string, ImageFileArtifact>,
+): CanvasImageRef[] {
+    const refs: CanvasImageRef[] = [];
+    const seen = new Set<string>();
+
+    for (const attachment of node.attachments ?? []) {
+        if (attachment.kind !== 'image' || !attachment.artifactId) {
+            continue;
+        }
+        const artifact = artifacts[attachment.artifactId];
+        if (!artifact || seen.has(artifact.id)) {
+            continue;
+        }
+        refs.push({ artifact, use: attachment.use, origin: 'input' });
+        seen.add(artifact.id);
+    }
+
+    for (const imageArtifact of getImageArtifacts(node.events)) {
+        const artifactId = imageArtifact.artifactId ?? imageArtifact.id;
+        const artifact = artifacts[artifactId];
+        if (!artifact || seen.has(artifact.id)) {
+            continue;
+        }
+        refs.push({ artifact, origin: 'output' });
+        seen.add(artifact.id);
+    }
+
+    return refs;
+}
+
+interface CanvasTurnNodeData {
+    node: MessageNode;
+    images: CanvasImageRef[];
+    isActive: boolean;
+    isOnActivePath: boolean;
+    selectedArtifactIds: string[];
+    onActivate: (nodeId: string) => void;
     onPreview: (artifactId: string) => void;
     onToggleSelection: (artifactId: string) => void;
 }
 
-interface OperationNodeData {
-    title: string;
-    inputCount: number;
-    outputCount: number;
-    isActive: boolean;
-    onActivate: () => void;
+interface CanvasTurnNodeProps {
+    data: CanvasTurnNodeData;
 }
 
-interface ImageArtifactNodeProps {
-    data: ImageNodeData;
-}
+function CanvasTurnNode({ data }: CanvasTurnNodeProps) {
+    const roleLabel = getRoleLabel(data.node.role);
+    const imageCount = data.images.length;
 
-function ImageArtifactNode({ data }: ImageArtifactNodeProps) {
     return (
         <div
-            className={`group overflow-hidden rounded-lg border bg-slate-900 shadow-xl transition-colors ${
-                data.isSelected
-                    ? 'border-blue-400 shadow-blue-500/20'
-                    : 'border-slate-700 hover:border-slate-500'
+            role="button"
+            tabIndex={0}
+            onClick={() => data.onActivate(data.node.id)}
+            onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    data.onActivate(data.node.id);
+                }
+            }}
+            className={`group overflow-hidden rounded-lg border bg-white shadow-sm transition-colors ${
+                data.isActive
+                    ? 'border-blue-500 ring-2 ring-blue-200'
+                    : data.isOnActivePath
+                        ? 'border-blue-200 hover:border-blue-400'
+                        : 'border-slate-200 hover:border-slate-400'
             }`}
-            style={{ width: IMAGE_NODE_WIDTH }}
+            style={{ width: CANVAS_NODE_WIDTH }}
+            title="Show this turn in chat"
         >
-            <Handle type="target" position={Position.Left} className="h-3 w-3 border-slate-950 bg-blue-400" />
-            <div className="relative bg-slate-950" style={{ height: IMAGE_PREVIEW_HEIGHT }}>
-                <button
-                    onClick={(event) => {
-                        event.stopPropagation();
-                        data.onPreview(data.artifact.id);
-                    }}
-                    className="flex h-full w-full cursor-zoom-in items-center justify-center"
-                    title="Open large preview"
-                >
-                    {data.imageSource ? (
-                        <img
-                            src={data.imageSource}
-                            alt={data.label}
-                            className="max-h-full max-w-full object-contain"
-                            loading="lazy"
-                        />
-                    ) : (
-                        <ImageIcon className="h-10 w-10 text-slate-600" />
-                    )}
-                </button>
-                <div className="absolute right-2 top-2 flex gap-1.5">
-                    <button
-                        onClick={(event) => {
-                            event.stopPropagation();
-                            data.onToggleSelection(data.artifact.id);
-                        }}
-                        className={`flex h-8 w-8 items-center justify-center rounded-md border transition-colors ${
-                            data.isSelected
-                                ? 'border-blue-300 bg-blue-500 text-white'
-                                : 'border-slate-600 bg-slate-950/80 text-slate-300 hover:border-blue-300 hover:text-blue-300'
-                        }`}
-                        title="Select image"
-                    >
-                        <Check className="h-4 w-4" />
-                    </button>
-                    <button
-                        onClick={(event) => {
-                            event.stopPropagation();
-                            data.onPreview(data.artifact.id);
-                        }}
-                        className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-600 bg-slate-950/80 text-slate-300 transition-colors hover:border-blue-300 hover:text-blue-300"
-                        title="Open large preview"
-                    >
-                        <Maximize2 className="h-4 w-4" />
-                    </button>
+            <Handle type="target" position={Position.Top} className="h-3 w-3 bg-slate-400" />
+            <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
+                <div className="flex items-center gap-2">
+                    {data.node.role === 'assistant'
+                        ? <Sparkles className="h-3.5 w-3.5 text-purple-500" />
+                        : <MessageSquare className="h-3.5 w-3.5 text-blue-500" />}
+                    <span className="text-xs font-bold uppercase tracking-wide text-slate-600">{roleLabel}</span>
                 </div>
-                <div className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-slate-950/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 opacity-0 transition-opacity group-hover:opacity-100">
-                    Click to preview
-                </div>
+                <span className="text-[11px] font-medium text-slate-400">
+                    {imageCount} image{imageCount === 1 ? '' : 's'}
+                </span>
             </div>
-            <div className="space-y-1 border-t border-slate-800 px-3 py-3">
-                <div className="truncate text-sm font-semibold text-slate-100">{data.label}</div>
-                <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                    <span className="truncate">{data.artifact.origin}</span>
-                    <span>{formatBytes(data.artifact.sizeBytes) || data.artifact.mimeType}</span>
+
+            {imageCount > 0 ? (
+                <div className={imageCount === 1 ? 'p-3' : 'grid grid-cols-2 gap-2 p-3'}>
+                    {data.images.slice(0, 4).map(({ artifact, use, origin }) => {
+                        const imageSource = getImageSource(artifact);
+                        const isSelected = data.selectedArtifactIds.includes(artifact.id);
+                        return (
+                            <div
+                                key={artifact.id}
+                                className={`relative overflow-hidden rounded-md border bg-slate-50 ${
+                                    imageCount === 1 ? 'h-64' : 'h-36'
+                                } ${isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-200'}`}
+                            >
+                                {imageSource ? (
+                                    <img
+                                        src={imageSource}
+                                        alt={artifact.label ?? artifact.name}
+                                        className="h-full w-full object-contain"
+                                        loading="lazy"
+                                    />
+                                ) : (
+                                    <div className="flex h-full w-full items-center justify-center text-slate-300">
+                                        <ImageIcon className="h-8 w-8" />
+                                    </div>
+                                )}
+                                <div className="absolute left-2 top-2 rounded bg-white/90 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 shadow-sm">
+                                    {use === 'edit_target' ? 'edit' : origin}
+                                </div>
+                                <div className="absolute right-2 top-2 flex gap-1">
+                                    <button
+                                        type="button"
+                                        onMouseDown={(event) => event.stopPropagation()}
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            data.onToggleSelection(artifact.id);
+                                        }}
+                                        className={`nodrag nopan flex h-7 w-7 items-center justify-center rounded-md border shadow-sm transition-colors ${
+                                            isSelected
+                                                ? 'border-blue-500 bg-blue-600 text-white'
+                                                : 'border-slate-200 bg-white/95 text-slate-500 hover:border-blue-300 hover:text-blue-600'
+                                        }`}
+                                        title="Select image"
+                                    >
+                                        <Check className="h-3.5 w-3.5" />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onMouseDown={(event) => event.stopPropagation()}
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            data.onPreview(artifact.id);
+                                        }}
+                                        className="nodrag nopan flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white/95 text-slate-500 shadow-sm transition-colors hover:border-blue-300 hover:text-blue-600"
+                                        title="Open large preview"
+                                    >
+                                        <Maximize2 className="h-3.5 w-3.5" />
+                                    </button>
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
+            ) : (
+                <div className="flex h-40 items-center justify-center bg-slate-50 text-slate-300">
+                    <MessageSquare className="h-8 w-8" />
+                </div>
+            )}
+
+            <div className="flex items-center justify-between border-t border-slate-100 px-3 py-2 text-[11px] text-slate-400">
+                <span>{new Date(data.node.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                {imageCount > 0 && (
+                    <span>{formatBytes(data.images[0]?.artifact.sizeBytes)}</span>
+                )}
             </div>
-            <Handle type="source" position={Position.Right} className="h-3 w-3 border-slate-950 bg-blue-400" />
+            <Handle type="source" position={Position.Bottom} className="h-3 w-3 bg-slate-400" />
         </div>
     );
 }
 
-interface OperationNodeProps {
-    data: OperationNodeData;
-}
-
-function OperationNode({ data }: OperationNodeProps) {
-    return (
-        <button
-            onClick={(event) => {
-                event.stopPropagation();
-                data.onActivate();
-            }}
-            className={`rounded-lg border p-3 text-left shadow-lg transition-colors ${
-                data.isActive
-                    ? 'border-blue-400 bg-blue-950 text-blue-50 ring-2 ring-blue-500/40'
-                    : 'border-slate-700 bg-slate-900 text-slate-100 hover:border-blue-400'
-            }`}
-            style={{ width: OPERATION_NODE_WIDTH }}
-            title="Set active checkpoint"
-        >
-            <Handle type="target" position={Position.Left} className="h-3 w-3 bg-blue-400" />
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-blue-300">
-                <Sparkles className="h-3.5 w-3.5" />
-                <span>{data.title}</span>
-            </div>
-            <div className="mt-2 flex items-center gap-2 text-[11px] font-medium text-slate-400">
-                <span>{data.inputCount} in</span>
-                <span className="h-1 w-1 rounded-full bg-slate-600" />
-                <span>{data.outputCount} out</span>
-            </div>
-            <Handle type="source" position={Position.Right} className="h-3 w-3 bg-blue-400" />
-        </button>
-    );
-}
-
 const nodeTypes = {
-    imageArtifact: ImageArtifactNode,
-    operation: OperationNode,
+    canvasTurn: CanvasTurnNode,
 };
-
-function buildTurnPairs(path: MessageNode[]) {
-    const turns: Array<{ userNode?: MessageNode; assistantNode?: MessageNode }> = [];
-    let index = 0;
-
-    while (index < path.length) {
-        const node = path[index];
-        const nextNode = path[index + 1];
-        if (node.role === 'user') {
-            const assistantNode = nextNode?.role === 'assistant' && nextNode.parentId === node.id
-                ? nextNode
-                : undefined;
-            turns.push({ userNode: node, assistantNode });
-            index += assistantNode ? 2 : 1;
-            continue;
-        }
-
-        turns.push({ assistantNode: node });
-        index += 1;
-    }
-
-    return turns;
-}
 
 interface ArtifactFlowProps {
     onPreview: (artifactId: string) => void;
@@ -200,164 +214,105 @@ interface ArtifactFlowProps {
 
 function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
     const {
-        activeNodeId,
+        nodes: storeNodes,
         artifacts,
+        activeNodeId,
         getPath,
         setActiveNode,
         canvasSelectedArtifactIds,
         toggleCanvasArtifactSelection,
         clearCanvasArtifactSelection,
     } = useGraphStore();
-    const { setCenter } = useReactFlow();
 
-    const path = getPath(activeNodeId);
+    const activePathIds = useMemo(
+        () => new Set(getPath(activeNodeId).map((node) => node.id)),
+        [activeNodeId, getPath],
+    );
     const selectedCount = canvasSelectedArtifactIds.filter((id) => artifacts[id]).length;
 
-    const { flowNodes, flowEdges, branchImageCount } = useMemo(() => {
-        const nodes: Node[] = [];
-        const edges: Edge[] = [];
-        const pathNodeIds = new Set(path.map((node) => node.id));
-        const branchImages = Object.values(artifacts).filter((artifact) =>
-            !artifact.sourceNodeId || pathNodeIds.has(artifact.sourceNodeId),
-        );
-        const renderedImageIds = new Set<string>();
-        const turns = buildTurnPairs(path);
-        let yOffset = 0;
-
-        const addImageNode = (artifact: ImageFileArtifact, x: number, y: number) => {
-            if (renderedImageIds.has(artifact.id)) {
-                return;
-            }
-            renderedImageIds.add(artifact.id);
-            nodes.push({
-                id: `image-${artifact.id}`,
-                type: 'imageArtifact',
-                position: { x, y },
+    const { flowNodes, flowEdges, imageNodeCount } = useMemo(() => {
+        const rawNodes: Node[] = Object.values(storeNodes)
+            .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
+            .map((node) => ({
+                id: node.id,
+                type: 'canvasTurn',
+                position: { x: 0, y: 0 },
                 data: {
-                    artifact,
-                    imageSource: getImageSource(artifact),
-                    label: artifact.label ?? artifact.name,
-                    isSelected: canvasSelectedArtifactIds.includes(artifact.id),
+                    node,
+                    images: getNodeImageRefs(node, artifacts),
+                    isActive: node.id === activeNodeId,
+                    isOnActivePath: activePathIds.has(node.id),
+                    selectedArtifactIds: canvasSelectedArtifactIds,
+                    onActivate: setActiveNode,
                     onPreview,
                     onToggleSelection: toggleCanvasArtifactSelection,
                 },
-            });
-        };
+            }));
 
-        turns.forEach((turn, turnIndex) => {
-            const operationSourceNode = turn.assistantNode ?? turn.userNode;
-            if (!operationSourceNode) {
-                return;
-            }
+        const rawEdges: Edge[] = Object.values(storeNodes).flatMap((node) => {
+            const parentIds = node.parentIds && node.parentIds.length > 0
+                ? node.parentIds
+                : node.parentId
+                    ? [node.parentId]
+                    : [];
 
-            const inputArtifacts = (turn.userNode?.attachments ?? [])
-                .map(getImageArtifactIdFromAttachment)
-                .filter((artifactId): artifactId is string => Boolean(artifactId))
-                .map((artifactId) => artifacts[artifactId])
-                .filter((artifact): artifact is ImageFileArtifact => Boolean(artifact));
-            const outputArtifacts = getImageArtifacts(turn.assistantNode?.events)
-                .map((artifact) => artifact.artifactId ?? artifact.id)
-                .map((artifactId) => artifacts[artifactId])
-                .filter((artifact): artifact is ImageFileArtifact => Boolean(artifact));
-            const rowImageCount = Math.max(inputArtifacts.length, outputArtifacts.length, 1);
-            const rowHeight = Math.max(MIN_ROW_HEIGHT, rowImageCount * (IMAGE_NODE_HEIGHT + 36));
-            const rowTop = yOffset;
-            const rowCenter = rowTop + rowHeight / 2 - 75;
-            const operationId = `operation-${operationSourceNode.id}`;
-
-            nodes.push({
-                id: operationId,
-                type: 'operation',
-                position: { x: OPERATION_X, y: rowCenter },
-                data: {
-                    title: `Turn ${turnIndex + 1}`,
-                    inputCount: inputArtifacts.length,
-                    outputCount: outputArtifacts.length,
-                    isActive: operationSourceNode.id === activeNodeId || turn.userNode?.id === activeNodeId,
-                    onActivate: () => setActiveNode(operationSourceNode.id),
-                },
-            });
-
-            inputArtifacts.forEach((artifact, inputIndex) => {
-                const imageY = rowTop + inputIndex * (IMAGE_NODE_HEIGHT + 36);
-                addImageNode(artifact, INPUT_X, imageY);
-                const attachment = turn.userNode?.attachments?.find((candidate) => candidate.artifactId === artifact.id);
-                edges.push({
-                    id: `edge-image-${artifact.id}-${operationId}-${inputIndex}`,
-                    source: `image-${artifact.id}`,
-                    target: operationId,
+            return parentIds.map((parentId) => {
+                const isActivePathEdge = activePathIds.has(parentId) && activePathIds.has(node.id);
+                return {
+                    id: `edge-${parentId}-${node.id}`,
+                    source: parentId,
+                    target: node.id,
                     type: 'smoothstep',
+                    animated: node.id === activeNodeId,
                     style: {
-                        stroke: attachment?.use === 'edit_target' ? '#f59e0b' : '#60a5fa',
-                        strokeWidth: 3,
+                        stroke: isActivePathEdge ? '#3b82f6' : '#cbd5e1',
+                        strokeWidth: isActivePathEdge ? 3 : 2,
                     },
                     markerEnd: {
                         type: MarkerType.ArrowClosed,
-                        color: attachment?.use === 'edit_target' ? '#f59e0b' : '#60a5fa',
+                        color: isActivePathEdge ? '#3b82f6' : '#cbd5e1',
                     },
-                });
+                };
             });
-
-            outputArtifacts.forEach((artifact, outputIndex) => {
-                const imageY = rowTop + outputIndex * (IMAGE_NODE_HEIGHT + 36);
-                addImageNode(artifact, OUTPUT_X, imageY);
-                edges.push({
-                    id: `edge-${operationId}-image-${artifact.id}-${outputIndex}`,
-                    source: operationId,
-                    target: `image-${artifact.id}`,
-                    type: 'smoothstep',
-                    style: { stroke: '#c084fc', strokeWidth: 3 },
-                    markerEnd: { type: MarkerType.ArrowClosed, color: '#c084fc' },
-                });
-            });
-
-            yOffset += rowHeight + 80;
         });
 
-        branchImages
-            .filter((artifact) => !renderedImageIds.has(artifact.id))
-            .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
-            .forEach((artifact, index) => {
-                addImageNode(artifact, OUTPUT_X, yOffset + index * (IMAGE_NODE_HEIGHT + 36));
-            });
+        const layouted = getLayoutedElements(rawNodes, rawEdges, 'TB', {}, {
+            width: CANVAS_NODE_WIDTH,
+            height: CANVAS_NODE_HEIGHT,
+        });
 
         return {
-            flowNodes: nodes,
-            flowEdges: edges,
-            branchImageCount: branchImages.length,
+            flowNodes: layouted.nodes,
+            flowEdges: layouted.edges,
+            imageNodeCount: Object.keys(artifacts).length,
         };
-    }, [activeNodeId, artifacts, canvasSelectedArtifactIds, onPreview, path, setActiveNode, toggleCanvasArtifactSelection]);
-
-    useEffect(() => {
-        const activeOperation = flowNodes.find((node) =>
-            node.type === 'operation' && (node.data as unknown as OperationNodeData).isActive,
-        );
-        if (!activeOperation) {
-            return;
-        }
-
-        setCenter(activeOperation.position.x + 560, activeOperation.position.y + 170, {
-            zoom: 0.78,
-            duration: 450,
-        });
-    }, [flowNodes, setCenter]);
+    }, [
+        activeNodeId,
+        activePathIds,
+        artifacts,
+        canvasSelectedArtifactIds,
+        onPreview,
+        setActiveNode,
+        storeNodes,
+        toggleCanvasArtifactSelection,
+    ]);
 
     return (
-        <div className="flex h-full flex-col bg-slate-950 text-slate-100">
-            <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950 px-4">
+        <div className="flex h-full flex-col bg-slate-50 text-slate-900">
+            <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4">
                 <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                        <ImageIcon className="h-4 w-4 text-blue-300" />
+                        <ImageIcon className="h-4 w-4 text-blue-600" />
                         <h2 className="truncate text-sm font-semibold">Memo Canvas</h2>
                     </div>
                     <p className="truncate text-xs text-slate-400">
-                        {branchImageCount} image node{branchImageCount === 1 ? '' : 's'} on this branch
+                        {imageNodeCount} image artifact{imageNodeCount === 1 ? '' : 's'} in this graph
                     </p>
                 </div>
                 {selectedCount > 0 && (
                     <button
                         onClick={clearCanvasArtifactSelection}
-                        className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
+                        className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50"
                         title="Clear canvas selection"
                     >
                         <X className="h-3.5 w-3.5" />
@@ -369,10 +324,10 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
             {flowNodes.length === 0 ? (
                 <div className="flex min-h-0 flex-1 items-center justify-center p-8">
                     <div className="max-w-sm text-center">
-                        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg border border-slate-800 bg-slate-900 text-slate-500">
+                        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-300">
                             <MessageSquare className="h-5 w-5" />
                         </div>
-                        <h3 className="mt-4 text-sm font-semibold text-slate-200">No active branch</h3>
+                        <h3 className="mt-4 text-sm font-semibold text-slate-700">No active branch</h3>
                     </div>
                 </div>
             ) : (
@@ -381,19 +336,71 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
                         nodes={flowNodes}
                         edges={flowEdges}
                         nodeTypes={nodeTypes}
-                        defaultViewport={{ x: 20, y: 80, zoom: 0.78 }}
-                        minZoom={0.2}
-                        maxZoom={1.2}
+                        onNodeClick={(_, node) => setActiveNode(node.id)}
+                        fitView
+                        fitViewOptions={{ padding: 0.14, maxZoom: 0.95 }}
+                        minZoom={0.25}
+                        maxZoom={1.15}
                         nodesDraggable={false}
                         nodesConnectable={false}
                         elementsSelectable={false}
                     >
-                        <Background color="#1e293b" gap={24} />
+                        <Background color="#e2e8f0" gap={24} />
                         <Controls showInteractive={false} />
                     </ReactFlow>
                 </div>
             )}
         </div>
+    );
+}
+
+function ImagePreviewOverlay({
+    artifact,
+    imageSource,
+    onClose,
+}: {
+    artifact: ImageFileArtifact;
+    imageSource: string;
+    onClose: () => void;
+}) {
+    return createPortal(
+        <div
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4"
+            onClick={onClose}
+        >
+            <div
+                className="flex h-[94dvh] w-[96vw] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl"
+                onClick={(event) => event.stopPropagation()}
+            >
+                <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                    <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-slate-800">
+                            {artifact.label ?? artifact.name}
+                        </div>
+                        <div className="truncate text-xs text-slate-400">{artifact.path}</div>
+                    </div>
+                    <button
+                        onClick={onClose}
+                        className="rounded-md p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                        title="Close preview"
+                    >
+                        <X className="h-4 w-4" />
+                    </button>
+                </div>
+                <div className="flex min-h-0 flex-1 items-center justify-center bg-slate-100 p-4">
+                    {imageSource ? (
+                        <img
+                            src={imageSource}
+                            alt={artifact.label ?? artifact.name}
+                            className="max-h-full max-w-full object-contain"
+                        />
+                    ) : (
+                        <ImageIcon className="h-12 w-12 text-slate-300" />
+                    )}
+                </div>
+            </div>
+        </div>,
+        document.body,
     );
 }
 
@@ -410,42 +417,11 @@ export function ImageCanvas() {
         <ReactFlowProvider>
             <ArtifactFlow onPreview={handlePreview} />
             {previewArtifact && (
-                <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 p-4 backdrop-blur-sm"
-                    onClick={() => setPreviewArtifactId(null)}
-                >
-                    <div
-                        className="flex max-h-[92dvh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-950 shadow-2xl"
-                        onClick={(event) => event.stopPropagation()}
-                    >
-                        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-                            <div className="min-w-0">
-                                <div className="truncate text-sm font-semibold text-slate-100">
-                                    {previewArtifact.label ?? previewArtifact.name}
-                                </div>
-                                <div className="truncate text-xs text-slate-500">{previewArtifact.path}</div>
-                            </div>
-                            <button
-                                onClick={() => setPreviewArtifactId(null)}
-                                className="rounded-md p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
-                                title="Close preview"
-                            >
-                                <X className="h-4 w-4" />
-                            </button>
-                        </div>
-                        <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-4">
-                            {previewSource ? (
-                                <img
-                                    src={previewSource}
-                                    alt={previewArtifact.label ?? previewArtifact.name}
-                                    className="max-h-[78dvh] max-w-full object-contain"
-                                />
-                            ) : (
-                                <ImageIcon className="h-12 w-12 text-slate-700" />
-                            )}
-                        </div>
-                    </div>
-                </div>
+                <ImagePreviewOverlay
+                    artifact={previewArtifact}
+                    imageSource={previewSource}
+                    onClose={() => setPreviewArtifactId(null)}
+                />
             )}
         </ReactFlowProvider>
     );
