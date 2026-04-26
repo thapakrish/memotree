@@ -4,9 +4,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .artifacts import get_image_artifact, save_image_artifact
 from .browser_import import close_browser
 from .importers import import_shared_chat_from_url
-from .models import ErrorResponse, SharedUrlImportRequest, SharedUrlImportResponse
+from .models import ErrorResponse, ImageArtifactSaveRequest, ImageArtifactSaveResponse, SharedUrlImportRequest, SharedUrlImportResponse
 
 
 app = FastAPI(title="MemoTree Import API")
@@ -55,3 +56,20 @@ async def fetch_shared_import(request: SharedUrlImportRequest) -> SharedUrlImpor
         raise HTTPException(status_code=504, detail=str(error)) from error
     except RuntimeError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post(
+    "/api/artifacts/images",
+    response_model=ImageArtifactSaveResponse,
+    responses={400: {"model": ErrorResponse}},
+)
+async def save_image_artifact_endpoint(request: ImageArtifactSaveRequest) -> ImageArtifactSaveResponse:
+    return await save_image_artifact(request)
+
+
+@app.get(
+    "/api/artifacts/images/{artifact_id}/{file_name}",
+    responses={404: {"model": ErrorResponse}},
+)
+async def get_image_artifact_endpoint(artifact_id: str, file_name: str):
+    return await get_image_artifact(artifact_id, file_name)

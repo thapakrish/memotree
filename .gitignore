@@ -28,6 +28,7 @@ backend/.venv/
 backend/**/__pycache__/
 backend/**/*.pyc
 backend/*.egg-info/
+artifacts/
 
 # Local environment and secrets
 .env
