@@ -14,6 +14,7 @@ import { ContextInspector } from './ContextInspector';
 import { featureFlags, isImageOnlyAttachmentMode } from '../config/featureFlags';
 import { buildImageArtifactFileName, buildImageArtifactPath } from '../lib/artifactFiles';
 import { getImageSource, readImageUrlAsBase64, saveImageArtifactFile } from '../lib/artifactStorage';
+import { stripGeneratedImagePlaceholders } from '../lib/generatedImagePlaceholders';
 import logoMark from '../assets/logo-mark.svg';
 
 function getTextSummary(text: string): string {
@@ -441,14 +442,19 @@ function AssistantMessageBody({
                                 )}
                             </details>
                         );
-                    case 'text':
+                    case 'text': {
+                        const text = stripGeneratedImagePlaceholders(event.text);
+                        if (!text) {
+                            return null;
+                        }
                         return (
                             <MarkdownRenderer
                                 key={`${event.kind}-${index}`}
-                                text={event.text}
+                                text={text}
                                 isStreaming={isStreaming && index === lastTextIndex}
                             />
                         );
+                    }
                     case 'image_artifact': {
                         const imageSource = getImageSource(event.artifact);
                         return (

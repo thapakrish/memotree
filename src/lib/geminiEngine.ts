@@ -14,6 +14,7 @@ import type { AttachmentPart, ChatEvent, CompactionBlock, MessageNode, MemoryPat
 import type { ProviderRequestConfig } from './providers/types';
 import { computePatch, validateEaseMemory } from './memoryEngine';
 import { getFinalAnswerText, getImageArtifacts } from './chatEvents';
+import { stripGeneratedImagePlaceholders } from './generatedImagePlaceholders';
 
 let geminiClient: GoogleGenAI | null = null;
 let activeApiKey: string | null = null;
@@ -209,8 +210,10 @@ function toModelParts(node: MessageNode): Part[] {
                         thought: true,
                         thoughtSignature: event.signature,
                     }];
-                case 'text':
-                    return [{ text: event.text }];
+                case 'text': {
+                    const text = stripGeneratedImagePlaceholders(event.text);
+                    return text ? [{ text }] : [];
+                }
                 case 'tool_call':
                     return [{
                         functionCall: {
@@ -229,9 +232,7 @@ function toModelParts(node: MessageNode): Part[] {
                                 data: event.artifact.data,
                             },
                         }]
-                        : [{
-                            text: `[generated_image] ref=${event.artifact.artifactPath ?? event.artifact.artifactId ?? event.artifact.id}; mime=${event.artifact.mimeType}`,
-                        }];
+                        : [];
             }
             }),
         ];
@@ -241,10 +242,15 @@ function toModelParts(node: MessageNode): Part[] {
 }
 
 function toGeminiContents(chatPath: MessageNode[]): Content[] {
-    return chatPath.map((node) => ({
-        role: node.role === 'assistant' ? 'model' : 'user',
-        parts: toModelParts(node),
-    }));
+    return chatPath.flatMap((node) => {
+        const parts = toModelParts(node);
+        return parts.length > 0
+            ? [{
+                role: node.role === 'assistant' ? 'model' : 'user',
+                parts,
+            }]
+            : [];
+    });
 }
 
 export function buildGeminiContents(chatPath: MessageNode[]): Content[] {
@@ -318,10 +324,13 @@ export function buildGeminiContentsWithCompaction(
         } else if (compactedIds.has(node.id)) {
             i++;
         } else {
-            contents.push({
-                role: node.role === 'assistant' ? 'model' : 'user',
-                parts: toModelParts(node),
-            });
+            const parts = toModelParts(node);
+            if (parts.length > 0) {
+                contents.push({
+                    role: node.role === 'assistant' ? 'model' : 'user',
+                    parts,
+                });
+            }
             i++;
         }
     }
@@ -526,8 +535,10 @@ export function createModelToolCallContent(
                         thought: true,
                         thoughtSignature: event.signature,
                     }];
-                case 'text':
-                    return [{ text: event.text }];
+                case 'text': {
+                    const text = stripGeneratedImagePlaceholders(event.text);
+                    return text ? [{ text }] : [];
+                }
                 case 'tool_call':
                 case 'tool_result':
                     return [];

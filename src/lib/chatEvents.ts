@@ -1,4 +1,5 @@
 import type { ChatEvent, MessageNode } from '../store/types';
+import { stripGeneratedImagePlaceholders } from './generatedImagePlaceholders';
 
 export function appendEvent(events: ChatEvent[], nextEvent: ChatEvent): ChatEvent[] {
     if (nextEvent.kind === 'text' || nextEvent.kind === 'thought') {
@@ -51,7 +52,7 @@ export function getFinalAnswerText(events?: ChatEvent[]): string {
 
     return events
         .filter((event) => event.kind === 'text')
-        .map((event) => event.text)
+        .map((event) => stripGeneratedImagePlaceholders(event.text))
         .join('')
         .trim();
 }
