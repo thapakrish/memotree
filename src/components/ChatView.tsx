@@ -53,6 +53,14 @@ function createAttachmentFromArtifact(artifact: ImageArtifact): AttachmentPart {
     };
 }
 
+function getImageInputCount(attachments?: AttachmentPart[]): number {
+    return (attachments ?? []).filter((attachment) => attachment.kind === 'image').length;
+}
+
+function formatImageCountLabel(count: number, noun: 'input' | 'output'): string {
+    return `${count} image ${noun}${count === 1 ? '' : 's'}`;
+}
+
 function buildBranchMarkdown(path: MessageNode[]): string {
     return path.map((node) => {
         const title = node.role === 'user'
@@ -1138,6 +1146,16 @@ export function ChatView() {
                             </div>
 
                             <div className={`mt-1.5 flex flex-wrap items-center gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                {msg.role === 'user' && getImageInputCount(msg.attachments) > 0 && (
+                                    <span className="rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-[11px] font-medium text-blue-700">
+                                        {formatImageCountLabel(getImageInputCount(msg.attachments), 'input')}
+                                    </span>
+                                )}
+                                {msg.role === 'assistant' && getImageArtifacts(msg.events).length > 0 && (
+                                    <span className="rounded-md border border-purple-100 bg-purple-50 px-2 py-1 text-[11px] font-medium text-purple-700">
+                                        {formatImageCountLabel(getImageArtifacts(msg.events).length, 'output')}
+                                    </span>
+                                )}
                                 <button
                                     onClick={() => setActiveNode(msg.id)}
                                     className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium shadow-sm transition-colors ${
