@@ -8,10 +8,12 @@ import {
     ReactFlowProvider,
     type Edge,
     type Node,
+    useEdgesState,
+    useNodesState,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Check, ImageIcon, Maximize2, MessageSquare, Sparkles, X } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getImageArtifacts } from '../lib/chatEvents';
 import { getImageSource } from '../lib/artifactStorage';
@@ -303,11 +305,15 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
         artifacts,
         activeNodeId,
         getPath,
+        uiPositions,
         setActiveNode,
+        setUiPosition,
         canvasSelectedArtifactIds,
         toggleCanvasArtifactSelection,
         clearCanvasArtifactSelection,
     } = useGraphStore();
+    const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node>([]);
+    const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
     const activePathIds = useMemo(
         () => new Set(getPath(activeNodeId).map((node) => node.id)),
@@ -374,7 +380,7 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
             });
         });
 
-        const layouted = getLayoutedElements(rawNodes, rawEdges, 'TB', {}, {
+        const layouted = getLayoutedElements(rawNodes, rawEdges, 'TB', uiPositions, {
             width: CANVAS_NODE_WIDTH,
             height: CANVAS_NODE_HEIGHT,
         });
@@ -393,7 +399,17 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
         setActiveNode,
         storeNodes,
         toggleCanvasArtifactSelection,
+        uiPositions,
     ]);
+
+    useEffect(() => {
+        setRfNodes(flowNodes);
+        setRfEdges(flowEdges);
+    }, [flowEdges, flowNodes, setRfEdges, setRfNodes]);
+
+    const handleNodeDragStop = useCallback((_event: React.MouseEvent, node: Node) => {
+        setUiPosition(node.id, node.position);
+    }, [setUiPosition]);
 
     return (
         <div className="flex h-full flex-col bg-slate-50 text-slate-900">
@@ -419,7 +435,7 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
                 )}
             </div>
 
-            {flowNodes.length === 0 ? (
+            {rfNodes.length === 0 ? (
                 <div className="flex min-h-0 flex-1 items-center justify-center p-8">
                     <div className="max-w-sm text-center">
                         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-300">
@@ -431,15 +447,18 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
             ) : (
                 <div className="min-h-0 flex-1">
                     <ReactFlow
-                        nodes={flowNodes}
-                        edges={flowEdges}
+                        nodes={rfNodes}
+                        edges={rfEdges}
                         nodeTypes={nodeTypes}
+                        onNodesChange={onNodesChange}
+                        onEdgesChange={onEdgesChange}
                         onNodeClick={(_, node) => setActiveNode(node.id)}
+                        onNodeDragStop={handleNodeDragStop}
                         fitView
                         fitViewOptions={{ padding: 0.14, maxZoom: 0.95 }}
                         minZoom={0.25}
                         maxZoom={1.15}
-                        nodesDraggable={false}
+                        nodesDraggable
                         nodesConnectable={false}
                         elementsSelectable={false}
                     >
