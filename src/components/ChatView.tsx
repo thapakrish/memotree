@@ -959,7 +959,7 @@ export function ChatView() {
             const hydratedPath = await hydratePathImageAttachments(newPath);
             const memoryState = reconstructMemory(hydratedPath);
             const lastNode = hydratedPath[hydratedPath.length - 1];
-            const requestedResponseMode = lastNode?.responseMode ?? 'text';
+            const requestedResponseMode = getEffectiveResponseMode(lastNode?.responseMode ?? 'text', lastNode?.attachments ?? [], imageModelId);
             const isFocusedImageEdit = shouldUseFocusedImageEditRequest(lastNode, requestedResponseMode);
             const requestPath = isFocusedImageEdit ? [lastNode] : hydratedPath;
             const requestCompactions = isFocusedImageEdit ? {} : compactions;
