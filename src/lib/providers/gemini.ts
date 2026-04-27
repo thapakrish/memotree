@@ -10,11 +10,13 @@ import {
     extractAssistantEvents,
     extractFunctionCalls,
     extractThoughtsTokenCount,
+    generateImagenEvents,
     generateGeminiResponseStream,
     generateGeminiResponseStreamFromContents,
 } from '../geminiEngine';
 import { mergeEvents } from '../chatEvents';
 import type { GenerateContentResponse } from '@google/genai';
+import { isImagenModelId } from '../geminiModels';
 
 async function* normalizeStream(
     rawStream: AsyncGenerator<GenerateContentResponse>,
@@ -75,12 +77,31 @@ function estimateGeminiAttachmentTokens(attachments: AttachmentPart[] = []): num
     }, 0);
 }
 
+function canUseImagenGeneration(path: Array<{ content: string; attachments?: AttachmentPart[] }>, requestConfig?: { responseMode?: string; imageModelId?: string }): boolean {
+    const lastNode = path.at(-1);
+    const hasImageInput = (lastNode?.attachments ?? []).some((attachment) => attachment.kind === 'image');
+    return requestConfig?.responseMode === 'image'
+        && isImagenModelId(requestConfig.imageModelId)
+        && Boolean(lastNode?.content.trim())
+        && !hasImageInput;
+}
+
 export function createGeminiProvider(apiKey: string): IProvider {
     return {
         id: 'gemini',
         capabilities: GEMINI_CAPABILITIES,
 
         async *stream(path, memoryState, compactions, signal, requestConfig) {
+            if (canUseImagenGeneration(path, requestConfig)) {
+                const events = await generateImagenEvents(path.at(-1)?.content ?? '', apiKey, signal, requestConfig);
+                yield {
+                    events,
+                    thoughtsTokenCount: 0,
+                    functionCalls: [],
+                };
+                return;
+            }
+
             const rawStream = await generateGeminiResponseStream(
                 path, memoryState, apiKey, signal, compactions, requestConfig,
             );

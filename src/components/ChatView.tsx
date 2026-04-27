@@ -15,7 +15,7 @@ import { featureFlags, isImageOnlyAttachmentMode } from '../config/featureFlags'
 import { buildImageArtifactFileName, buildImageArtifactPath } from '../lib/artifactFiles';
 import { getImageSource, readImageUrlAsBase64, saveImageArtifactFile } from '../lib/artifactStorage';
 import { stripGeneratedImagePlaceholders } from '../lib/generatedImagePlaceholders';
-import { getGeminiImageModelOptions } from '../lib/geminiModels';
+import { DEFAULT_IMAGEN_OUTPUT_COUNT, getImageModelOptions, isImagenModelId } from '../lib/geminiModels';
 import logoMark from '../assets/logo-mark.svg';
 
 function getTextSummary(text: string): string {
@@ -561,6 +561,8 @@ export function ChatView() {
         setApiKey,
         imageModelId,
         setImageModelId,
+        imageOutputCount = DEFAULT_IMAGEN_OUTPUT_COUNT,
+        setImageOutputCount,
         importEnvelope,
         previewImportEnvelope,
         applyAcceptedImportSuggestions,
@@ -595,7 +597,8 @@ export function ChatView() {
         () => apiKey ? createProvider(providerId, apiKey) : null,
         [apiKey, providerId],
     );
-    const imageModelOptions = useMemo(() => getGeminiImageModelOptions(imageModelId), [imageModelId]);
+    const imageModelOptions = useMemo(() => getImageModelOptions(imageModelId), [imageModelId]);
+    const selectedImageModelUsesImagen = isImagenModelId(imageModelId);
     const scrollRef = useRef<HTMLDivElement>(null);
     const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -842,6 +845,7 @@ export function ChatView() {
         const providerEstimate = provider.estimateContext(draftMemoryState, draftAttachments, {
             responseMode: estimatedResponseMode,
             imageModelId,
+            imageOutputCount,
         });
         const conversationTokens = path.reduce((sum, node) => {
             const eventTextLength = (node.events ?? []).reduce((eventSum, event) =>
@@ -856,7 +860,7 @@ export function ChatView() {
             + providerEstimate.attachmentTokens
             + conversationTokens
             + draftTokens;
-    }, [attachments, draftMemoryState, imageModelId, input, path, provider, responseMode, selectedCanvasDraftAttachments]);
+    }, [attachments, draftMemoryState, imageModelId, imageOutputCount, input, path, provider, responseMode, selectedCanvasDraftAttachments]);
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -949,7 +953,7 @@ export function ChatView() {
             const isFocusedImageEdit = shouldUseFocusedImageEditRequest(lastNode, requestedResponseMode);
             const requestPath = isFocusedImageEdit ? [lastNode] : hydratedPath;
             const requestCompactions = isFocusedImageEdit ? {} : compactions;
-            const requestConfig = { responseMode: requestedResponseMode, imageModelId };
+            const requestConfig = { responseMode: requestedResponseMode, imageModelId, imageOutputCount };
             const initialDelta = await collectProviderStream(
                 provider.stream(requestPath, memoryState, requestCompactions, controller.signal, requestConfig),
                 setStreamingEvents,
@@ -1689,7 +1693,13 @@ export function ChatView() {
                                     <span className="shrink-0 text-slate-500">Model</span>
                                     <select
                                         value={imageModelId}
-                                        onChange={(event) => setImageModelId(event.target.value)}
+                                        onChange={(event) => {
+                                            const nextModelId = event.target.value;
+                                            setImageModelId(nextModelId);
+                                            if (isImagenModelId(nextModelId) && responseMode === 'multimodal') {
+                                                setResponseMode('image');
+                                            }
+                                        }}
                                         disabled={isTyping}
                                         className="min-w-0 flex-1 bg-transparent text-xs font-semibold text-slate-700 outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:w-44"
                                         aria-label="Image model"
@@ -1701,6 +1711,27 @@ export function ChatView() {
                                         ))}
                                     </select>
                                 </label>
+                                {selectedImageModelUsesImagen && responseMode !== 'text' && (
+                                    <label
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-500 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-100"
+                                        title="Imagen can return a reliable number of text-to-image variants"
+                                    >
+                                        <span>Outputs</span>
+                                        <select
+                                            value={imageOutputCount}
+                                            onChange={(event) => setImageOutputCount(Number(event.target.value))}
+                                            disabled={isTyping}
+                                            className="bg-transparent text-xs font-semibold text-slate-700 outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                                            aria-label="Imagen output count"
+                                        >
+                                            {[1, 2, 3, 4].map((count) => (
+                                                <option key={count} value={count}>
+                                                    {count}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+                                )}
                             </div>
                         )}
 

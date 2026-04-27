@@ -246,6 +246,7 @@ export interface ConversationGraph {
     sessionTitle?: string;
     providerId: ProviderId;
     imageModelId?: string;
+    imageOutputCount?: number;
     apiKey: string | null;
     importEnvelope?: ImportedConversationEnvelope;
 }

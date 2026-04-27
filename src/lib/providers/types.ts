@@ -29,6 +29,7 @@ export interface ProviderFunctionResponse {
 export interface ProviderRequestConfig {
     responseMode?: AssistantResponseMode;
     imageModelId?: string;
+    imageOutputCount?: number;
     textModelId?: string;
 }
 

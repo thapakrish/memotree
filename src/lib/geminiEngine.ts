@@ -15,7 +15,12 @@ import type { ProviderRequestConfig } from './providers/types';
 import { computePatch, validateEaseMemory } from './memoryEngine';
 import { getFinalAnswerText, getImageArtifacts } from './chatEvents';
 import { stripGeneratedImagePlaceholders } from './generatedImagePlaceholders';
-import { DEFAULT_GEMINI_IMAGE_MODEL_ID, DEFAULT_GEMINI_TEXT_MODEL_ID } from './geminiModels';
+import {
+    DEFAULT_GEMINI_IMAGE_MODEL_ID,
+    DEFAULT_GEMINI_TEXT_MODEL_ID,
+    DEFAULT_IMAGEN_OUTPUT_COUNT,
+    isImagenModelId,
+} from './geminiModels';
 
 let geminiClient: GoogleGenAI | null = null;
 let activeApiKey: string | null = null;
@@ -78,9 +83,20 @@ function getResponseModalities(requestConfig?: ProviderRequestConfig): Modality[
 }
 
 export function getGeminiModelForRequest(requestConfig?: ProviderRequestConfig): string {
-    return isImageResponseMode(requestConfig)
-        ? requestConfig?.imageModelId?.trim() || DEFAULT_GEMINI_IMAGE_MODEL_ID
-        : requestConfig?.textModelId?.trim() || DEFAULT_GEMINI_TEXT_MODEL_ID;
+    if (!isImageResponseMode(requestConfig)) {
+        return requestConfig?.textModelId?.trim() || DEFAULT_GEMINI_TEXT_MODEL_ID;
+    }
+
+    const imageModelId = requestConfig?.imageModelId?.trim();
+    if (isImagenModelId(imageModelId)) {
+        return DEFAULT_GEMINI_IMAGE_MODEL_ID;
+    }
+    return imageModelId || DEFAULT_GEMINI_IMAGE_MODEL_ID;
+}
+
+function getImagenOutputCount(requestConfig?: ProviderRequestConfig): number {
+    const count = Math.round(requestConfig?.imageOutputCount ?? DEFAULT_IMAGEN_OUTPUT_COUNT);
+    return Math.min(4, Math.max(1, count));
 }
 
 export function interceptMemoryTool(
@@ -528,6 +544,60 @@ export async function generateGeminiResponseStreamFromContents(
     }
 
     return stream;
+}
+
+export async function generateImagenEvents(
+    prompt: string,
+    apiKey: string,
+    signal?: AbortSignal,
+    requestConfig?: ProviderRequestConfig,
+): Promise<ChatEvent[]> {
+    const imageModelId = requestConfig?.imageModelId?.trim();
+    const model = isImagenModelId(imageModelId)
+        ? imageModelId
+        : 'imagen-4.0-generate-001';
+    const client = initGemini(apiKey);
+
+    const response = await client.models.generateImages({
+        model,
+        prompt: prompt.trim(),
+        config: {
+            numberOfImages: getImagenOutputCount(requestConfig),
+            includeRaiReason: true,
+            outputMimeType: 'image/png',
+            abortSignal: signal,
+        },
+    });
+
+    if (signal?.aborted) {
+        return [];
+    }
+
+    const events: ChatEvent[] = [];
+    for (const [index, generatedImage] of (response.generatedImages ?? []).entries()) {
+        const image = generatedImage.image;
+        if (!image?.imageBytes) {
+            continue;
+        }
+        events.push({
+            kind: 'image_artifact',
+            artifact: {
+                id: crypto.randomUUID(),
+                mimeType: (image.mimeType ?? 'image/png') as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif',
+                data: image.imageBytes,
+                model,
+                label: `Imagen variant ${index + 1}`,
+            },
+        });
+    }
+
+    if (events.length === 0) {
+        const filteredReasons = (response.generatedImages ?? [])
+            .flatMap((generatedImage) => generatedImage.raiFilteredReason ? [generatedImage.raiFilteredReason] : []);
+        throw new Error(filteredReasons[0] ?? 'Imagen did not return any images.');
+    }
+
+    return events;
 }
 
 export async function generateGeminiResponseStream(
