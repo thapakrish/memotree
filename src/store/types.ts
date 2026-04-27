@@ -245,6 +245,7 @@ export interface ConversationGraph {
     activeNodeId: string | null;
     sessionTitle?: string;
     providerId: ProviderId;
+    imageModelId?: string;
     apiKey: string | null;
     importEnvelope?: ImportedConversationEnvelope;
 }

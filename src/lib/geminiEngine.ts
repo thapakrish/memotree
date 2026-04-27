@@ -15,11 +15,10 @@ import type { ProviderRequestConfig } from './providers/types';
 import { computePatch, validateEaseMemory } from './memoryEngine';
 import { getFinalAnswerText, getImageArtifacts } from './chatEvents';
 import { stripGeneratedImagePlaceholders } from './generatedImagePlaceholders';
+import { DEFAULT_GEMINI_IMAGE_MODEL_ID, DEFAULT_GEMINI_TEXT_MODEL_ID } from './geminiModels';
 
 let geminiClient: GoogleGenAI | null = null;
 let activeApiKey: string | null = null;
-const TEXT_RESPONSE_MODEL = import.meta.env.VITE_GEMINI_TEXT_MODEL?.trim() || 'gemini-2.5-flash';
-const IMAGE_RESPONSE_MODEL = import.meta.env.VITE_GEMINI_IMAGE_MODEL?.trim() || 'gemini-3.1-flash-image-preview';
 
 export const initGemini = (apiKey: string) => {
     if (!geminiClient || activeApiKey !== apiKey) {
@@ -79,7 +78,9 @@ function getResponseModalities(requestConfig?: ProviderRequestConfig): Modality[
 }
 
 export function getGeminiModelForRequest(requestConfig?: ProviderRequestConfig): string {
-    return isImageResponseMode(requestConfig) ? IMAGE_RESPONSE_MODEL : TEXT_RESPONSE_MODEL;
+    return isImageResponseMode(requestConfig)
+        ? requestConfig?.imageModelId?.trim() || DEFAULT_GEMINI_IMAGE_MODEL_ID
+        : requestConfig?.textModelId?.trim() || DEFAULT_GEMINI_TEXT_MODEL_ID;
 }
 
 export function interceptMemoryTool(
@@ -416,7 +417,7 @@ export async function compactPathNodes(
     }).join('\n\n');
 
     const response = await client.models.generateContent({
-        model: TEXT_RESPONSE_MODEL,
+        model: DEFAULT_GEMINI_TEXT_MODEL_ID,
         contents: createUserContent([{
             text: `Summarize this conversation segment concisely for context compaction. Preserve all important facts, decisions, attachments, tool calls, tool results, memory updates, and context needed to continue the conversation naturally. Write in past tense. Omit pleasantries, but do not omit technical or factual details that later turns may rely on.\n\n${transcript}`,
         }]),

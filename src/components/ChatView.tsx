@@ -15,6 +15,7 @@ import { featureFlags, isImageOnlyAttachmentMode } from '../config/featureFlags'
 import { buildImageArtifactFileName, buildImageArtifactPath } from '../lib/artifactFiles';
 import { getImageSource, readImageUrlAsBase64, saveImageArtifactFile } from '../lib/artifactStorage';
 import { stripGeneratedImagePlaceholders } from '../lib/generatedImagePlaceholders';
+import { getGeminiImageModelOptions } from '../lib/geminiModels';
 import logoMark from '../assets/logo-mark.svg';
 
 function getTextSummary(text: string): string {
@@ -558,6 +559,8 @@ export function ChatView() {
         providerId,
         apiKey,
         setApiKey,
+        imageModelId,
+        setImageModelId,
         importEnvelope,
         previewImportEnvelope,
         applyAcceptedImportSuggestions,
@@ -592,6 +595,7 @@ export function ChatView() {
         () => apiKey ? createProvider(providerId, apiKey) : null,
         [apiKey, providerId],
     );
+    const imageModelOptions = useMemo(() => getGeminiImageModelOptions(imageModelId), [imageModelId]);
     const scrollRef = useRef<HTMLDivElement>(null);
     const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -835,7 +839,10 @@ export function ChatView() {
         }
 
         const estimatedResponseMode = getEffectiveResponseMode(responseMode, draftAttachments);
-        const providerEstimate = provider.estimateContext(draftMemoryState, draftAttachments, { responseMode: estimatedResponseMode });
+        const providerEstimate = provider.estimateContext(draftMemoryState, draftAttachments, {
+            responseMode: estimatedResponseMode,
+            imageModelId,
+        });
         const conversationTokens = path.reduce((sum, node) => {
             const eventTextLength = (node.events ?? []).reduce((eventSum, event) =>
                 eventSum + ('text' in event ? event.text.length : 0), 0);
@@ -849,7 +856,7 @@ export function ChatView() {
             + providerEstimate.attachmentTokens
             + conversationTokens
             + draftTokens;
-    }, [attachments, draftMemoryState, input, path, provider, responseMode, selectedCanvasDraftAttachments]);
+    }, [attachments, draftMemoryState, imageModelId, input, path, provider, responseMode, selectedCanvasDraftAttachments]);
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -942,8 +949,9 @@ export function ChatView() {
             const isFocusedImageEdit = shouldUseFocusedImageEditRequest(lastNode, requestedResponseMode);
             const requestPath = isFocusedImageEdit ? [lastNode] : hydratedPath;
             const requestCompactions = isFocusedImageEdit ? {} : compactions;
+            const requestConfig = { responseMode: requestedResponseMode, imageModelId };
             const initialDelta = await collectProviderStream(
-                provider.stream(requestPath, memoryState, requestCompactions, controller.signal, { responseMode: requestedResponseMode }),
+                provider.stream(requestPath, memoryState, requestCompactions, controller.signal, requestConfig),
                 setStreamingEvents,
                 setThoughtsTokenCount,
             );
@@ -1021,7 +1029,7 @@ export function ChatView() {
                 const followUpDelta = await collectProviderStream(
                     provider.continueWithToolResults(
                         requestPath, requestCompactions, events, pendingFunctionCalls,
-                        functionResponses, nextMemoryState, controller.signal, { responseMode: requestedResponseMode },
+                        functionResponses, nextMemoryState, controller.signal, requestConfig,
                     ),
                     setStreamingEvents,
                     setThoughtsTokenCount,
@@ -1673,6 +1681,26 @@ export function ChatView() {
                                         <span>{option.label}</span>
                                     </button>
                                 ))}
+                                <label
+                                    className="inline-flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-500 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-100 sm:flex-none"
+                                    title="Select the Gemini image model for image generation and editing"
+                                >
+                                    <Cpu className="h-3.5 w-3.5 shrink-0" />
+                                    <span className="shrink-0 text-slate-500">Model</span>
+                                    <select
+                                        value={imageModelId}
+                                        onChange={(event) => setImageModelId(event.target.value)}
+                                        disabled={isTyping}
+                                        className="min-w-0 flex-1 bg-transparent text-xs font-semibold text-slate-700 outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:w-44"
+                                        aria-label="Image model"
+                                    >
+                                        {imageModelOptions.map((option) => (
+                                            <option key={option.id} value={option.id}>
+                                                {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
                             </div>
                         )}
 

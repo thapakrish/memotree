@@ -28,6 +28,8 @@ export interface ProviderFunctionResponse {
 
 export interface ProviderRequestConfig {
     responseMode?: AssistantResponseMode;
+    imageModelId?: string;
+    textModelId?: string;
 }
 
 /**
