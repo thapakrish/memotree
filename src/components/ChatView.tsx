@@ -1696,7 +1696,7 @@ export function ChatView() {
                                         onChange={(event) => {
                                             const nextModelId = event.target.value;
                                             setImageModelId(nextModelId);
-                                            if (isImagenModelId(nextModelId) && responseMode === 'multimodal') {
+                                            if (isImagenModelId(nextModelId)) {
                                                 setResponseMode('image');
                                             }
                                         }}
