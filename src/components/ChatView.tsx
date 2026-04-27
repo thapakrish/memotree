@@ -110,7 +110,11 @@ function hasEditTargetImage(attachments?: AttachmentPart[]): boolean {
 function getEffectiveResponseMode(
     requestedMode: AssistantResponseMode,
     attachments: AttachmentPart[],
+    imageModelId?: string,
 ): AssistantResponseMode {
+    if (isImagenModelId(imageModelId)) {
+        return 'image';
+    }
     return requestedMode === 'text' && hasEditTargetImage(attachments) ? 'image' : requestedMode;
 }
 
@@ -841,7 +845,7 @@ export function ChatView() {
             return null;
         }
 
-        const estimatedResponseMode = getEffectiveResponseMode(responseMode, draftAttachments);
+        const estimatedResponseMode = getEffectiveResponseMode(responseMode, draftAttachments, imageModelId);
         const providerEstimate = provider.estimateContext(draftMemoryState, draftAttachments, {
             responseMode: estimatedResponseMode,
             imageModelId,
@@ -887,6 +891,12 @@ export function ChatView() {
         const timeout = window.setTimeout(() => setStatusMessage(null), 4000);
         return () => window.clearTimeout(timeout);
     }, [statusMessage]);
+
+    useEffect(() => {
+        if (selectedImageModelUsesImagen && responseMode !== 'image') {
+            setResponseMode('image');
+        }
+    }, [responseMode, selectedImageModelUsesImagen]);
 
     // Auto-resize textarea
     useEffect(() => {
@@ -1091,7 +1101,7 @@ export function ChatView() {
         const parentId = activeNode?.role === 'user' ? activeNode.parentId : activeNodeId;
         const nextInput = input;
         let nextAttachments: AttachmentPart[];
-        const requestedResponseMode = getEffectiveResponseMode(responseMode, draftAttachments);
+        const requestedResponseMode = getEffectiveResponseMode(responseMode, draftAttachments, imageModelId);
 
         try {
             nextAttachments = await Promise.all(draftAttachments.map(resolveAttachmentData));
