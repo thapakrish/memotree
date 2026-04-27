@@ -66,6 +66,36 @@ export function isImagenModelId(modelId?: string): modelId is string {
     return Boolean(modelId?.startsWith('imagen-'));
 }
 
+function normalizeModelId(modelId?: string): string {
+    return modelId?.trim().replace(/^models\//, '') ?? '';
+}
+
+export function getImageModelDisplayName(modelId?: string): string | null {
+    const normalized = normalizeModelId(modelId);
+    if (!normalized) {
+        return null;
+    }
+
+    const option = IMAGE_MODEL_OPTIONS.find((candidate) => {
+        const candidateId = normalizeModelId(candidate.id);
+        return normalized === candidateId || normalized.includes(candidateId);
+    });
+
+    if (option) {
+        return option.engine === 'imagen' ? option.label : `Gemini ${option.label}`;
+    }
+
+    if (/^imagen-/.test(normalized)) {
+        return 'Imagen';
+    }
+
+    if (/^gemini-/.test(normalized)) {
+        return 'Gemini';
+    }
+
+    return normalized;
+}
+
 export function getImageModelOptions(selectedModelId?: string): ImageModelOption[] {
     if (!selectedModelId || IMAGE_MODEL_OPTIONS.some((option) => option.id === selectedModelId)) {
         return IMAGE_MODEL_OPTIONS;

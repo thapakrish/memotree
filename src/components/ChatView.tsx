@@ -15,7 +15,7 @@ import { featureFlags, isImageOnlyAttachmentMode } from '../config/featureFlags'
 import { buildImageArtifactFileName, buildImageArtifactPath } from '../lib/artifactFiles';
 import { getImageSource, readImageUrlAsBase64, saveImageArtifactFile } from '../lib/artifactStorage';
 import { stripGeneratedImagePlaceholders } from '../lib/generatedImagePlaceholders';
-import { DEFAULT_IMAGEN_OUTPUT_COUNT, getImageModelOptions, isImagenModelId } from '../lib/geminiModels';
+import { DEFAULT_IMAGEN_OUTPUT_COUNT, getImageModelDisplayName, getImageModelOptions, isImagenModelId } from '../lib/geminiModels';
 import logoMark from '../assets/logo-mark.svg';
 
 function getTextSummary(text: string): string {
@@ -40,6 +40,20 @@ function formatBytes(bytes?: number): string {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getAssistantModelLabel(events?: ChatEvent[]): string {
+    const labels = [...new Set(
+        getImageArtifacts(events)
+            .map((artifact) => getImageModelDisplayName(artifact.model))
+            .filter((label): label is string => Boolean(label)),
+    )];
+
+    if (labels.length === 0) {
+        return 'Gemini';
+    }
+
+    return labels.length === 1 ? labels[0] : 'Mixed models';
 }
 
 function describeAttachment(attachment: AttachmentPart): string {
@@ -1387,7 +1401,7 @@ export function ChatView() {
                                 ) : (
                                     <>
                                         <Cpu className="w-3 h-3 text-purple-500" />
-                                        <span className="text-xs font-semibold text-purple-600">Gemini</span>
+                                        <span className="text-xs font-semibold text-purple-600">{getAssistantModelLabel(msg.events)}</span>
                                     </>
                                 )}
                             </div>
@@ -1506,7 +1520,7 @@ export function ChatView() {
                     <div className="flex flex-col max-w-[85%] mr-auto items-start">
                         <div className="flex items-center gap-2 mb-1 px-1">
                             <Cpu className="w-3 h-3 text-purple-500 animate-pulse" />
-                            <span className="text-xs font-semibold text-purple-600">Gemini</span>
+                            <span className="text-xs font-semibold text-purple-600">{getAssistantModelLabel(streamingDisplayEvents)}</span>
                         </div>
                         <div className="p-4 rounded-2xl shadow-sm text-[15px] leading-relaxed relative bg-white border border-slate-200 text-slate-800 rounded-tl-sm w-full">
                             {streamingDisplayEvents.length > 0 ? (

@@ -33,6 +33,7 @@ import { createPortal } from 'react-dom';
 import { getImageArtifacts } from '../lib/chatEvents';
 import { getImageSource } from '../lib/artifactStorage';
 import { getLayoutedElements } from '../lib/layout';
+import { getImageModelDisplayName } from '../lib/geminiModels';
 import { GroupNodesModal } from './GroupNodesModal';
 import { featureFlags } from '../config/featureFlags';
 import type { AttachmentPart, ContextGroup, ImageFileArtifact, MessageNode } from '../store/types';
@@ -51,10 +52,22 @@ function formatBytes(bytes?: number): string {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function getRoleLabel(role: MessageNode['role']): string {
-    if (role === 'assistant') return 'Gemini';
-    if (role === 'user') return 'You';
-    return 'System';
+function getCanvasNodeLabel(node: MessageNode, images: CanvasImageRef[]): string {
+    if (node.role === 'user') return 'You';
+    if (node.role === 'system') return 'System';
+
+    const labels = [...new Set(
+        images
+            .filter((image) => image.origin === 'output')
+            .map((image) => getImageModelDisplayName(image.artifact.model))
+            .filter((label): label is string => Boolean(label)),
+    )];
+
+    if (labels.length === 0) {
+        return 'Gemini';
+    }
+
+    return labels.length === 1 ? labels[0] : 'Mixed models';
 }
 
 interface CanvasImageRef {
@@ -144,7 +157,7 @@ interface CanvasTurnNodeProps {
 }
 
 function CanvasTurnNode({ data }: CanvasTurnNodeProps) {
-    const roleLabel = getRoleLabel(data.node.role);
+    const roleLabel = getCanvasNodeLabel(data.node, data.images);
     const imageCount = data.images.length;
     const nodeWidth = data.isProminent ? CANVAS_NODE_WIDTH : COMPACT_NODE_WIDTH;
     const primaryGroup = data.groups[0];
