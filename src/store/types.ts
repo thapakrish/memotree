@@ -240,6 +240,7 @@ export interface ConversationGraph {
     artifacts: Record<string, ImageFileArtifact>;
     groups: Record<string, ContextGroup>;
     uiPositions: Record<string, GraphUiPosition>;
+    canvasPrunedNodeIds: string[];
     compactions: Record<string, CompactionBlock>;
     rootId: string | null;
     activeNodeId: string | null;

@@ -52,6 +52,8 @@ interface GraphState extends ConversationGraph {
     toggleNodeSelection: (id: string) => void;
     setSelectedNodeIds: (ids: string[]) => void;
     clearNodeSelection: () => void;
+    pruneCanvasNodes: (ids: string[]) => void;
+    restoreCanvasPruning: () => void;
     toggleCanvasArtifactSelection: (id: string) => void;
     setCanvasArtifactSelection: (ids: string[]) => void;
     clearCanvasArtifactSelection: () => void;
@@ -84,6 +86,7 @@ function createEmptySessionState() {
         artifacts: {},
         groups: {},
         uiPositions: {},
+        canvasPrunedNodeIds: [],
         compactions: {},
         rootId: null,
         activeNodeId: null,
@@ -108,6 +111,63 @@ function areNodeSelectionsEqual(left: string[], right: string[]) {
     const normalizedLeft = [...left].sort();
     const normalizedRight = [...right].sort();
     return normalizedLeft.every((id, index) => id === normalizedRight[index]);
+}
+
+function collectNodeSubtreeIds(nodes: Record<string, MessageNode>, rootIds: string[]): Set<string> {
+    const childIdsByParentId = new Map<string, string[]>();
+    for (const node of Object.values(nodes)) {
+        const parentIds = node.parentIds && node.parentIds.length > 0
+            ? node.parentIds
+            : node.parentId
+                ? [node.parentId]
+                : [];
+
+        for (const parentId of parentIds) {
+            const childIds = childIdsByParentId.get(parentId) ?? [];
+            childIds.push(node.id);
+            childIdsByParentId.set(parentId, childIds);
+        }
+    }
+
+    const collected = new Set<string>();
+    const queue = rootIds.filter((id) => nodes[id]);
+    while (queue.length > 0) {
+        const id = queue.shift();
+        if (!id || collected.has(id)) {
+            continue;
+        }
+        collected.add(id);
+        queue.push(...(childIdsByParentId.get(id) ?? []));
+    }
+
+    return collected;
+}
+
+function getNearestVisibleNodeId(
+    nodes: Record<string, MessageNode>,
+    activeNodeId: string | null,
+    rootId: string | null,
+    hiddenNodeIds: Set<string>,
+): string | null {
+    let cursor = activeNodeId;
+    while (cursor) {
+        const node = nodes[cursor];
+        if (!node) {
+            break;
+        }
+
+        if (!hiddenNodeIds.has(cursor)) {
+            return cursor;
+        }
+
+        cursor = node.parentId;
+    }
+
+    if (rootId && nodes[rootId] && !hiddenNodeIds.has(rootId)) {
+        return rootId;
+    }
+
+    return Object.keys(nodes).find((id) => !hiddenNodeIds.has(id)) ?? null;
 }
 
 function updateSuggestionStatus(
@@ -343,6 +403,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 artifacts: savedSession.graph.artifacts ?? {},
                 groups: savedSession.graph.groups ?? {},
                 uiPositions: savedSession.graph.uiPositions ?? {},
+                canvasPrunedNodeIds: savedSession.graph.canvasPrunedNodeIds ?? [],
                 compactions: savedSession.graph.compactions ?? {},
                 sessionTitle: savedSession.graph.sessionTitle ?? savedSession.title,
                 providerId: savedSession.graph.providerId ?? 'gemini',
@@ -400,6 +461,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             artifacts: savedSession.graph.artifacts ?? {},
             groups: savedSession.graph.groups ?? {},
             uiPositions: savedSession.graph.uiPositions ?? {},
+            canvasPrunedNodeIds: savedSession.graph.canvasPrunedNodeIds ?? [],
             compactions: savedSession.graph.compactions ?? {},
             sessionTitle: savedSession.graph.sessionTitle ?? savedSession.title,
             providerId: savedSession.graph.providerId ?? 'gemini',
@@ -425,6 +487,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             artifacts: validatedSession.graph.artifacts ?? {},
             groups: validatedSession.graph.groups ?? {},
             uiPositions: validatedSession.graph.uiPositions ?? {},
+            canvasPrunedNodeIds: validatedSession.graph.canvasPrunedNodeIds ?? [],
             compactions: validatedSession.graph.compactions ?? {},
             sessionTitle: validatedSession.graph.sessionTitle ?? validatedSession.title,
             providerId: validatedSession.graph.providerId ?? 'gemini',
@@ -493,6 +556,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             artifacts: {},
             groups: {},
             uiPositions: {},
+            canvasPrunedNodeIds: [],
             compactions: {},
             providerId: get().providerId,
             imageModelId: get().imageModelId,
@@ -674,6 +738,28 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     }),
 
     clearNodeSelection: () => set({ selectedNodeIds: [] }),
+
+    pruneCanvasNodes: (ids) => set((state) => {
+        const nextPrunedRootIds = [...new Set([
+            ...state.canvasPrunedNodeIds,
+            ...ids.filter((id) => Boolean(state.nodes[id])),
+        ])];
+        const hiddenNodeIds = collectNodeSubtreeIds(state.nodes, nextPrunedRootIds);
+        const activeNodeId = state.activeNodeId && hiddenNodeIds.has(state.activeNodeId)
+            ? getNearestVisibleNodeId(state.nodes, state.activeNodeId, state.rootId, hiddenNodeIds)
+            : state.activeNodeId;
+
+        return {
+            canvasPrunedNodeIds: nextPrunedRootIds,
+            activeNodeId,
+            selectedNodeIds: [],
+        };
+    }),
+
+    restoreCanvasPruning: () => set({
+        canvasPrunedNodeIds: [],
+        selectedNodeIds: [],
+    }),
 
     toggleCanvasArtifactSelection: (id) => set((state) => {
         const exists = state.canvasSelectedArtifactIds.includes(id);
@@ -917,6 +1003,7 @@ useGraphStore.subscribe((state) => {
         artifacts: state.artifacts,
         groups: state.groups,
         uiPositions: state.uiPositions,
+        canvasPrunedNodeIds: state.canvasPrunedNodeIds,
         compactions: state.compactions,
         sessionTitle: state.sessionTitle,
         providerId: state.providerId,
@@ -942,6 +1029,7 @@ useGraphStore.subscribe((state) => {
             artifacts: state.artifacts,
             groups: state.groups,
             uiPositions: state.uiPositions,
+            canvasPrunedNodeIds: state.canvasPrunedNodeIds,
             compactions: state.compactions,
             sessionTitle: state.sessionTitle,
             providerId: state.providerId,
@@ -956,6 +1044,7 @@ useGraphStore.subscribe((state) => {
             artifacts: state.artifacts,
             groups: state.groups,
             uiPositions: state.uiPositions,
+            canvasPrunedNodeIds: state.canvasPrunedNodeIds,
             compactions: state.compactions,
             sessionTitle: state.sessionTitle,
             providerId: state.providerId,

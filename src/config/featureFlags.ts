@@ -7,6 +7,7 @@ function envFlag(name: string, fallback = false) {
 
 export const featureFlags = {
     advancedGraphTools: envFlag('VITE_ENABLE_ADVANCED_GRAPH_TOOLS', false),
+    canvasOrganizationTools: envFlag('VITE_ENABLE_CANVAS_ORGANIZATION_TOOLS', true),
     experimentalImports: envFlag('VITE_ENABLE_EXPERIMENTAL_IMPORTS', false),
     importInference: envFlag('VITE_ENABLE_IMPORT_INFERENCE', false),
     sharedUrlImport: envFlag('VITE_ENABLE_SHARED_URL_IMPORT', false),

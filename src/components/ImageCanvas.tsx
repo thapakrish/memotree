@@ -6,19 +6,36 @@ import {
     Position,
     ReactFlow,
     ReactFlowProvider,
+    SelectionMode,
     type Edge,
     type Node,
     useEdgesState,
     useNodesState,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Check, ImageIcon, Maximize2, MessageSquare, Sparkles, X } from 'lucide-react';
+import {
+    Check,
+    FolderTree,
+    GitBranch,
+    ImageIcon,
+    Maximize2,
+    MessageSquare,
+    MousePointer2,
+    Network,
+    RotateCcw,
+    Scissors,
+    Sparkles,
+    SquareDashedMousePointer,
+    X,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getImageArtifacts } from '../lib/chatEvents';
 import { getImageSource } from '../lib/artifactStorage';
 import { getLayoutedElements } from '../lib/layout';
-import type { AttachmentPart, ImageFileArtifact, MessageNode } from '../store/types';
+import { GroupNodesModal } from './GroupNodesModal';
+import { featureFlags } from '../config/featureFlags';
+import type { AttachmentPart, ContextGroup, ImageFileArtifact, MessageNode } from '../store/types';
 import { useGraphStore } from '../store/useGraphStore';
 
 const CANVAS_NODE_WIDTH = 390;
@@ -78,12 +95,44 @@ function getNodeImageRefs(
     return refs;
 }
 
+function collectNodeSubtreeIds(nodes: Record<string, MessageNode>, rootIds: string[]): Set<string> {
+    const childIdsByParentId = new Map<string, string[]>();
+    for (const node of Object.values(nodes)) {
+        const parentIds = node.parentIds && node.parentIds.length > 0
+            ? node.parentIds
+            : node.parentId
+                ? [node.parentId]
+                : [];
+
+        for (const parentId of parentIds) {
+            const childIds = childIdsByParentId.get(parentId) ?? [];
+            childIds.push(node.id);
+            childIdsByParentId.set(parentId, childIds);
+        }
+    }
+
+    const collected = new Set<string>();
+    const queue = rootIds.filter((id) => nodes[id]);
+    while (queue.length > 0) {
+        const id = queue.shift();
+        if (!id || collected.has(id)) {
+            continue;
+        }
+        collected.add(id);
+        queue.push(...(childIdsByParentId.get(id) ?? []));
+    }
+
+    return collected;
+}
+
 interface CanvasTurnNodeData {
     node: MessageNode;
     images: CanvasImageRef[];
     isProminent: boolean;
     isActive: boolean;
+    isSelected: boolean;
     isOnActivePath: boolean;
+    groups: ContextGroup[];
     selectedArtifactIds: string[];
     onActivate: (nodeId: string) => void;
     onPreview: (artifactId: string) => void;
@@ -98,6 +147,7 @@ function CanvasTurnNode({ data }: CanvasTurnNodeProps) {
     const roleLabel = getRoleLabel(data.node.role);
     const imageCount = data.images.length;
     const nodeWidth = data.isProminent ? CANVAS_NODE_WIDTH : COMPACT_NODE_WIDTH;
+    const primaryGroup = data.groups[0];
     const nodeIcon = data.node.role === 'assistant'
         ? <Sparkles className="h-3.5 w-3.5 text-purple-500" />
         : <MessageSquare className="h-3.5 w-3.5 text-blue-500" />;
@@ -114,8 +164,10 @@ function CanvasTurnNode({ data }: CanvasTurnNodeProps) {
                         data.onActivate(data.node.id);
                     }
                 }}
-                className={`group overflow-hidden rounded-lg border bg-white shadow-sm transition-colors ${
-                    data.isActive
+                className={`group relative overflow-hidden rounded-lg border bg-white shadow-sm transition-colors ${
+                    data.isSelected
+                        ? 'border-amber-500 ring-2 ring-amber-200'
+                        : data.isActive
                         ? 'border-blue-500 ring-2 ring-blue-200'
                         : data.isOnActivePath
                             ? 'border-blue-200 hover:border-blue-400'
@@ -124,6 +176,12 @@ function CanvasTurnNode({ data }: CanvasTurnNodeProps) {
                 style={{ width: nodeWidth }}
                 title="Show this turn in chat"
             >
+                {primaryGroup && (
+                    <div
+                        className="absolute inset-x-0 top-0 h-1"
+                        style={{ backgroundColor: primaryGroup.color }}
+                    />
+                )}
                 <Handle type="target" position={Position.Top} className="h-3 w-3 bg-slate-400" />
                 <div className="flex items-center justify-between gap-2 px-3 py-2">
                     <div className="flex min-w-0 items-center gap-2">
@@ -192,8 +250,10 @@ function CanvasTurnNode({ data }: CanvasTurnNodeProps) {
                     data.onActivate(data.node.id);
                 }
             }}
-            className={`group overflow-hidden rounded-lg border bg-white shadow-sm transition-colors ${
-                data.isActive
+            className={`group relative overflow-hidden rounded-lg border bg-white shadow-sm transition-colors ${
+                data.isSelected
+                    ? 'border-amber-500 ring-2 ring-amber-200'
+                    : data.isActive
                     ? 'border-blue-500 ring-2 ring-blue-200'
                     : data.isOnActivePath
                         ? 'border-blue-200 hover:border-blue-400'
@@ -202,6 +262,12 @@ function CanvasTurnNode({ data }: CanvasTurnNodeProps) {
             style={{ width: nodeWidth }}
             title="Show this turn in chat"
         >
+            {primaryGroup && (
+                <div
+                    className="absolute inset-x-0 top-0 h-1"
+                    style={{ backgroundColor: primaryGroup.color }}
+                />
+            )}
             <Handle type="target" position={Position.Top} className="h-3 w-3 bg-slate-400" />
             <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
                 <div className="flex items-center gap-2">
@@ -282,6 +348,19 @@ function CanvasTurnNode({ data }: CanvasTurnNodeProps) {
 
             <div className="flex items-center justify-between border-t border-slate-100 px-3 py-2 text-[11px] text-slate-400">
                 <span>{new Date(data.node.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                {data.groups.length > 0 && (
+                    <div className="flex min-w-0 flex-1 justify-center gap-1 px-2">
+                        {data.groups.slice(0, 2).map((group) => (
+                            <span
+                                key={group.id}
+                                className="truncate rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                                style={{ backgroundColor: `${group.color}18`, color: group.color }}
+                            >
+                                {group.name}
+                            </span>
+                        ))}
+                    </div>
+                )}
                 {imageCount > 0 && (
                     <span>{formatBytes(data.images[0]?.artifact.sizeBytes)}</span>
                 )}
@@ -303,26 +382,59 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
     const {
         nodes: storeNodes,
         artifacts,
+        groups: storeGroups,
         activeNodeId,
         getPath,
         uiPositions,
+        canvasPrunedNodeIds,
+        selectedNodeIds,
         setActiveNode,
         setUiPosition,
+        setSelectedNodeIds,
+        toggleNodeSelection,
+        clearNodeSelection,
+        createGroup,
+        pruneCanvasNodes,
+        restoreCanvasPruning,
         canvasSelectedArtifactIds,
         toggleCanvasArtifactSelection,
         clearCanvasArtifactSelection,
     } = useGraphStore();
     const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node>([]);
     const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge>([]);
+    const [isSelectionMode, setIsSelectionMode] = useState(false);
+    const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
+    const [isGrouping, setIsGrouping] = useState(false);
 
     const activePathIds = useMemo(
         () => new Set(getPath(activeNodeId).map((node) => node.id)),
         [activeNodeId, getPath],
     );
-    const selectedCount = canvasSelectedArtifactIds.filter((id) => artifacts[id]).length;
+    const prunedNodeIds = useMemo(
+        () => collectNodeSubtreeIds(storeNodes, canvasPrunedNodeIds),
+        [canvasPrunedNodeIds, storeNodes],
+    );
+    const selectedArtifactCount = canvasSelectedArtifactIds.filter((id) => artifacts[id]).length;
+    const selectedNodes = selectedNodeIds.flatMap((id) => {
+        const node = storeNodes[id];
+        return node ? [node] : [];
+    });
+    const visibleSelectedNodeIds = selectedNodeIds.filter((id) => storeNodes[id] && !prunedNodeIds.has(id));
+    const canUseOrganizationTools = featureFlags.canvasOrganizationTools;
+
+    const handleNodeActivate = useCallback((nodeId: string) => {
+        if (isSelectionMode) {
+            toggleNodeSelection(nodeId);
+            return;
+        }
+
+        clearNodeSelection();
+        setActiveNode(nodeId);
+    }, [clearNodeSelection, isSelectionMode, setActiveNode, toggleNodeSelection]);
 
     const { flowNodes, flowEdges, imageNodeCount } = useMemo(() => {
         const rawNodes: Node[] = Object.values(storeNodes)
+            .filter((node) => !prunedNodeIds.has(node.id))
             .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
             .map((node) => {
                 const images = getNodeImageRefs(node, artifacts);
@@ -338,14 +450,17 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
                     id: node.id,
                     type: 'canvasTurn',
                     position: { x: 0, y: 0 },
+                    selected: selectedNodeIds.includes(node.id),
                     data: {
                         node,
                         images,
                         isProminent,
                         isActive: node.id === activeNodeId,
+                        isSelected: selectedNodeIds.includes(node.id),
                         isOnActivePath: activePathIds.has(node.id),
+                        groups: (node.groupIds ?? []).map((groupId) => storeGroups[groupId]).filter(Boolean),
                         selectedArtifactIds: canvasSelectedArtifactIds,
-                        onActivate: setActiveNode,
+                        onActivate: handleNodeActivate,
                         onPreview,
                         onToggleSelection: toggleCanvasArtifactSelection,
                         layoutSize,
@@ -354,13 +469,17 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
             });
 
         const rawEdges: Edge[] = Object.values(storeNodes).flatMap((node) => {
+            if (prunedNodeIds.has(node.id)) {
+                return [];
+            }
+
             const parentIds = node.parentIds && node.parentIds.length > 0
                 ? node.parentIds
                 : node.parentId
                     ? [node.parentId]
                     : [];
 
-            return parentIds.map((parentId) => {
+            return parentIds.filter((parentId) => !prunedNodeIds.has(parentId)).map((parentId) => {
                 const isActivePathEdge = activePathIds.has(parentId) && activePathIds.has(node.id);
                 return {
                     id: `edge-${parentId}-${node.id}`,
@@ -395,8 +514,11 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
         activePathIds,
         artifacts,
         canvasSelectedArtifactIds,
+        handleNodeActivate,
         onPreview,
-        setActiveNode,
+        prunedNodeIds,
+        selectedNodeIds,
+        storeGroups,
         storeNodes,
         toggleCanvasArtifactSelection,
         uiPositions,
@@ -411,9 +533,66 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
         setUiPosition(node.id, node.position);
     }, [setUiPosition]);
 
+    const handleSelectionModeToggle = useCallback(() => {
+        setIsSelectionMode((current) => {
+            if (current) {
+                clearNodeSelection();
+            }
+            return !current;
+        });
+    }, [clearNodeSelection]);
+
+    const handleSelectActivePath = useCallback(() => {
+        const ids = [...activePathIds].filter((id) => storeNodes[id] && !prunedNodeIds.has(id));
+        setSelectedNodeIds(ids);
+        setIsSelectionMode(true);
+    }, [activePathIds, prunedNodeIds, setSelectedNodeIds, storeNodes]);
+
+    const handleSelectActiveSubtree = useCallback(() => {
+        if (!activeNodeId) {
+            return;
+        }
+
+        const ids = [...collectNodeSubtreeIds(storeNodes, [activeNodeId])]
+            .filter((id) => storeNodes[id] && !prunedNodeIds.has(id));
+        setSelectedNodeIds(ids);
+        setIsSelectionMode(true);
+    }, [activeNodeId, prunedNodeIds, setSelectedNodeIds, storeNodes]);
+
+    const handlePruneSelected = useCallback(() => {
+        if (visibleSelectedNodeIds.length === 0) {
+            return;
+        }
+
+        pruneCanvasNodes(visibleSelectedNodeIds);
+    }, [pruneCanvasNodes, visibleSelectedNodeIds]);
+
+    const handleGroupSubmit = useCallback(({
+        name,
+        color,
+        contextMode,
+    }: {
+        name: string;
+        color: string;
+        contextMode: 'full' | 'compact' | 'result_only' | 'exclude';
+    }) => {
+        setIsGrouping(true);
+        try {
+            createGroup({
+                name,
+                color,
+                contextMode,
+                nodeIds: selectedNodes.map((node) => node.id),
+            });
+            setIsGroupModalOpen(false);
+        } finally {
+            setIsGrouping(false);
+        }
+    }, [createGroup, selectedNodes]);
+
     return (
         <div className="flex h-full flex-col bg-slate-50 text-slate-900">
-            <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4">
+            <div className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-2">
                 <div className="min-w-0">
                     <div className="flex items-center gap-2">
                         <ImageIcon className="h-4 w-4 text-blue-600" />
@@ -423,16 +602,87 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
                         {imageNodeCount} image artifact{imageNodeCount === 1 ? '' : 's'} in this graph
                     </p>
                 </div>
-                {selectedCount > 0 && (
-                    <button
-                        onClick={clearCanvasArtifactSelection}
-                        className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50"
-                        title="Clear canvas selection"
-                    >
-                        <X className="h-3.5 w-3.5" />
-                        {selectedCount} selected
-                    </button>
-                )}
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                    {canUseOrganizationTools && (
+                        <>
+                            <button
+                                type="button"
+                                onClick={handleSelectionModeToggle}
+                                className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                                    isSelectionMode
+                                        ? 'border-blue-300 bg-blue-50 text-blue-700'
+                                        : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700'
+                                }`}
+                                title="Select canvas nodes"
+                            >
+                                {isSelectionMode ? <SquareDashedMousePointer className="h-3.5 w-3.5" /> : <MousePointer2 className="h-3.5 w-3.5" />}
+                                {isSelectionMode ? `${visibleSelectedNodeIds.length} selected` : 'Select'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleSelectActivePath}
+                                disabled={!activeNodeId}
+                                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                title="Select the active path"
+                            >
+                                <GitBranch className="h-3.5 w-3.5" />
+                                Path
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleSelectActiveSubtree}
+                                disabled={!activeNodeId}
+                                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                title="Select the active subtree"
+                            >
+                                <Network className="h-3.5 w-3.5" />
+                                Subtree
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setIsGroupModalOpen(true)}
+                                disabled={visibleSelectedNodeIds.length === 0}
+                                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                title="Group selected nodes"
+                            >
+                                <FolderTree className="h-3.5 w-3.5" />
+                                Group
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handlePruneSelected}
+                                disabled={visibleSelectedNodeIds.length === 0}
+                                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                title="Hide selected nodes and their descendants from this canvas"
+                            >
+                                <Scissors className="h-3.5 w-3.5" />
+                                Prune
+                            </button>
+                            {canvasPrunedNodeIds.length > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={restoreCanvasPruning}
+                                    className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                                    title="Restore pruned canvas nodes"
+                                >
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                    Restore
+                                </button>
+                            )}
+                        </>
+                    )}
+                    {selectedArtifactCount > 0 && (
+                        <button
+                            type="button"
+                            onClick={clearCanvasArtifactSelection}
+                            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                            title="Clear image selection"
+                        >
+                            <X className="h-3.5 w-3.5" />
+                            {selectedArtifactCount} image{selectedArtifactCount === 1 ? '' : 's'}
+                        </button>
+                    )}
+                </div>
             </div>
 
             {rfNodes.length === 0 ? (
@@ -452,20 +702,41 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
                         nodeTypes={nodeTypes}
                         onNodesChange={onNodesChange}
                         onEdgesChange={onEdgesChange}
-                        onNodeClick={(_, node) => setActiveNode(node.id)}
                         onNodeDragStop={handleNodeDragStop}
+                        onPaneClick={clearNodeSelection}
+                        onSelectionChange={({ nodes: selectedFlowNodes }) => {
+                            if (!isSelectionMode) {
+                                return;
+                            }
+
+                            setSelectedNodeIds(selectedFlowNodes.map((selectedFlowNode) => selectedFlowNode.id));
+                        }}
                         fitView
                         fitViewOptions={{ padding: 0.14, maxZoom: 0.95 }}
                         minZoom={0.25}
                         maxZoom={1.15}
-                        nodesDraggable
+                        nodesDraggable={!isSelectionMode}
                         nodesConnectable={false}
-                        elementsSelectable={false}
+                        elementsSelectable={canUseOrganizationTools && isSelectionMode}
+                        selectionKeyCode={null}
+                        selectionOnDrag={canUseOrganizationTools && isSelectionMode}
+                        selectionMode={SelectionMode.Partial}
+                        multiSelectionKeyCode={null}
+                        panOnDrag={!canUseOrganizationTools || !isSelectionMode}
                     >
                         <Background color="#e2e8f0" gap={24} />
                         <Controls showInteractive={false} />
                     </ReactFlow>
                 </div>
+            )}
+            {canUseOrganizationTools && (
+                <GroupNodesModal
+                    isOpen={isGroupModalOpen}
+                    selectedCount={selectedNodes.length}
+                    isSubmitting={isGrouping}
+                    onClose={() => setIsGroupModalOpen(false)}
+                    onSubmit={handleGroupSubmit}
+                />
             )}
         </div>
     );
