@@ -29,7 +29,7 @@ import {
     SquareDashedMousePointer,
     X,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { getImageArtifacts } from '../lib/chatEvents';
 import { getImageSource } from '../lib/artifactStorage';
@@ -46,6 +46,8 @@ const COMPACT_NODE_WIDTH = 190;
 const COMPACT_NODE_HEIGHT = 78;
 const COMPACT_IMAGE_NODE_HEIGHT = 126;
 const IMAGE_WORKSPACE_INTENTS = new Set<SessionIntent>(['image_generate', 'image_edit', 'style_fit', 'variants']);
+
+type ImageCanvasView = 'workspace' | 'timeline';
 
 function formatBytes(bytes?: number): string {
     if (!bytes) return '';
@@ -410,9 +412,10 @@ const nodeTypes = {
 
 interface ArtifactFlowProps {
     onPreview: (artifactId: string) => void;
+    headerActions?: ReactNode;
 }
 
-function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
+function ArtifactFlow({ onPreview, headerActions }: ArtifactFlowProps) {
     const {
         nodes: storeNodes,
         artifacts,
@@ -637,6 +640,7 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
                     </p>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2">
+                    {headerActions}
                     {canUseOrganizationTools && (
                         <>
                             <button
@@ -772,6 +776,45 @@ function ArtifactFlow({ onPreview }: ArtifactFlowProps) {
                     onSubmit={handleGroupSubmit}
                 />
             )}
+        </div>
+    );
+}
+
+function ImageCanvasViewSwitch({
+    value,
+    onChange,
+}: {
+    value: ImageCanvasView;
+    onChange: (value: ImageCanvasView) => void;
+}) {
+    const buttonClassName = (mode: ImageCanvasView) => `inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+        value === mode
+            ? 'bg-white text-blue-700 shadow-sm'
+            : 'text-slate-500 hover:text-slate-800'
+    }`;
+
+    return (
+        <div className="inline-flex overflow-hidden rounded-md border border-slate-200 bg-slate-100 p-0.5" role="group" aria-label="Canvas view">
+            <button
+                type="button"
+                onClick={() => onChange('workspace')}
+                className={buttonClassName('workspace')}
+                aria-pressed={value === 'workspace'}
+                title="Show image workspace"
+            >
+                <ImageIcon className="h-3.5 w-3.5" />
+                Images
+            </button>
+            <button
+                type="button"
+                onClick={() => onChange('timeline')}
+                className={buttonClassName('timeline')}
+                aria-pressed={value === 'timeline'}
+                title="Show node timeline"
+            >
+                <GitBranch className="h-3.5 w-3.5" />
+                Timeline
+            </button>
         </div>
     );
 }
@@ -932,7 +975,13 @@ function WorkspaceImageCard({
     );
 }
 
-function ImageWorkspace({ onPreview }: { onPreview: (artifactId: string) => void }) {
+function ImageWorkspace({
+    onPreview,
+    onChangeView,
+}: {
+    onPreview: (artifactId: string) => void;
+    onChangeView: (value: ImageCanvasView) => void;
+}) {
     const {
         artifacts,
         canvasSelectedArtifactIds,
@@ -971,8 +1020,11 @@ function ImageWorkspace({ onPreview }: { onPreview: (artifactId: string) => void
                     </div>
                     <p className="truncate text-xs text-slate-400">{getWorkspaceSubtitle(sessionIntent)}</p>
                 </div>
-                <div className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
-                    {imageArtifacts.length} image{imageArtifacts.length === 1 ? '' : 's'}
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                    <ImageCanvasViewSwitch value="workspace" onChange={onChangeView} />
+                    <div className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
+                        {imageArtifacts.length} image{imageArtifacts.length === 1 ? '' : 's'}
+                    </div>
                 </div>
             </div>
 
@@ -1046,20 +1098,27 @@ function ImageWorkspace({ onPreview }: { onPreview: (artifactId: string) => void
 
 export function ImageCanvas() {
     const { artifacts, sessionIntent } = useGraphStore();
+    const [imageCanvasView, setImageCanvasView] = useState<ImageCanvasView>('workspace');
     const [previewArtifactId, setPreviewArtifactId] = useState<string | null>(null);
     const previewArtifact = previewArtifactId ? artifacts[previewArtifactId] : undefined;
     const previewSource = previewArtifact ? getImageSource(previewArtifact) : '';
+    const isImageIntent = isImageWorkspaceIntent(sessionIntent);
     const handlePreview = useCallback((artifactId: string) => {
         setPreviewArtifactId(artifactId);
     }, []);
 
     return (
         <>
-            {isImageWorkspaceIntent(sessionIntent) ? (
-                <ImageWorkspace onPreview={handlePreview} />
+            {isImageIntent && imageCanvasView === 'workspace' ? (
+                <ImageWorkspace onPreview={handlePreview} onChangeView={setImageCanvasView} />
             ) : (
                 <ReactFlowProvider>
-                    <ArtifactFlow onPreview={handlePreview} />
+                    <ArtifactFlow
+                        onPreview={handlePreview}
+                        headerActions={isImageIntent ? (
+                            <ImageCanvasViewSwitch value="timeline" onChange={setImageCanvasView} />
+                        ) : undefined}
+                    />
                 </ReactFlowProvider>
             )}
             {previewArtifact && (
