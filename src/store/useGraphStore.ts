@@ -6,6 +6,7 @@ import type {
     CompactionBlock,
     ContextGroup,
     ImageFileArtifact,
+    ImageFileUse,
     ImageArtifactStorageUpdate,
     ImportedTurn,
     ImportSourcePlatform,
@@ -32,6 +33,7 @@ interface GraphState extends ConversationGraph {
     saveError: string | null;
     selectedNodeIds: string[];
     canvasSelectedArtifactIds: string[];
+    canvasSelectedArtifactUse: ImageFileUse;
     previewNodes: Record<string, MessageNode> | null;
     previewImportEnvelope: GraphState['importEnvelope'] | null;
     lastImportApplySnapshot: Pick<ConversationGraph, 'nodes' | 'importEnvelope' | 'uiPositions'> | null;
@@ -59,7 +61,8 @@ interface GraphState extends ConversationGraph {
     pruneCanvasNodes: (ids: string[]) => void;
     restoreCanvasPruning: () => void;
     toggleCanvasArtifactSelection: (id: string) => void;
-    setCanvasArtifactSelection: (ids: string[]) => void;
+    setCanvasArtifactSelection: (ids: string[], use?: ImageFileUse) => void;
+    setCanvasArtifactSelectionUse: (use: ImageFileUse) => void;
     clearCanvasArtifactSelection: () => void;
     addCompaction: (block: CompactionBlock) => void;
     removeCompaction: (id: string) => void;
@@ -402,6 +405,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     saveError: null,
     selectedNodeIds: [],
     canvasSelectedArtifactIds: [],
+    canvasSelectedArtifactUse: 'edit_target',
 
     hydrateSession: async () => {
         const savedSession = await loadLastSession();
@@ -427,6 +431,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 lastSavedAt: savedSession.updatedAt,
                 saveError: null,
                 canvasSelectedArtifactIds: [],
+                canvasSelectedArtifactUse: 'edit_target',
                 previewNodes: null,
                 previewImportEnvelope: null,
                 lastImportApplySnapshot: null,
@@ -443,6 +448,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             lastSavedAt: null,
             saveError: null,
             canvasSelectedArtifactIds: [],
+            canvasSelectedArtifactUse: 'edit_target',
             previewNodes: null,
             previewImportEnvelope: null,
             lastImportApplySnapshot: null,
@@ -464,6 +470,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             saveError: null,
             selectedNodeIds: [],
             canvasSelectedArtifactIds: [],
+            canvasSelectedArtifactUse: 'edit_target',
         });
     },
 
@@ -496,6 +503,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             saveError: null,
             selectedNodeIds: [],
             canvasSelectedArtifactIds: [],
+            canvasSelectedArtifactUse: 'edit_target',
             previewNodes: null,
             previewImportEnvelope: null,
             lastImportApplySnapshot: null,
@@ -526,6 +534,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             saveError: null,
             selectedNodeIds: [],
             canvasSelectedArtifactIds: [],
+            canvasSelectedArtifactUse: 'edit_target',
             previewNodes: null,
             previewImportEnvelope: null,
             lastImportApplySnapshot: null,
@@ -619,6 +628,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             saveError: null,
             selectedNodeIds: [],
             canvasSelectedArtifactIds: [],
+            canvasSelectedArtifactUse: 'edit_target',
             previewNodes: null,
             previewImportEnvelope: null,
             lastImportApplySnapshot: null,
@@ -801,9 +811,14 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         };
     }),
 
-    setCanvasArtifactSelection: (ids) => set({ canvasSelectedArtifactIds: [...new Set(ids)] }),
+    setCanvasArtifactSelection: (ids, use) => set((state) => ({
+        canvasSelectedArtifactIds: [...new Set(ids)],
+        canvasSelectedArtifactUse: use ?? state.canvasSelectedArtifactUse,
+    })),
 
-    clearCanvasArtifactSelection: () => set({ canvasSelectedArtifactIds: [] }),
+    setCanvasArtifactSelectionUse: (canvasSelectedArtifactUse) => set({ canvasSelectedArtifactUse }),
+
+    clearCanvasArtifactSelection: () => set({ canvasSelectedArtifactIds: [], canvasSelectedArtifactUse: 'edit_target' }),
 
     createGroup: (groupData) => {
         const id = crypto.randomUUID();

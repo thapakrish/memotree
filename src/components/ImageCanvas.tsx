@@ -22,6 +22,7 @@ import {
     MessageSquare,
     MousePointer2,
     Network,
+    Pencil,
     RotateCcw,
     Scissors,
     Sparkles,
@@ -36,7 +37,7 @@ import { getLayoutedElements } from '../lib/layout';
 import { getImageModelDisplayName } from '../lib/geminiModels';
 import { GroupNodesModal } from './GroupNodesModal';
 import { featureFlags } from '../config/featureFlags';
-import type { AttachmentPart, ContextGroup, ImageFileArtifact, MessageNode } from '../store/types';
+import type { AttachmentPart, ContextGroup, ImageFileArtifact, MessageNode, SessionIntent } from '../store/types';
 import { useGraphStore } from '../store/useGraphStore';
 
 const CANVAS_NODE_WIDTH = 390;
@@ -44,12 +45,32 @@ const CANVAS_NODE_HEIGHT = 330;
 const COMPACT_NODE_WIDTH = 190;
 const COMPACT_NODE_HEIGHT = 78;
 const COMPACT_IMAGE_NODE_HEIGHT = 126;
+const IMAGE_WORKSPACE_INTENTS = new Set<SessionIntent>(['image_generate', 'image_edit', 'style_fit', 'variants']);
 
 function formatBytes(bytes?: number): string {
     if (!bytes) return '';
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isImageWorkspaceIntent(intent?: SessionIntent): boolean {
+    return Boolean(intent && IMAGE_WORKSPACE_INTENTS.has(intent));
+}
+
+function getWorkspaceSubtitle(intent?: SessionIntent): string {
+    switch (intent) {
+        case 'image_generate':
+            return 'Prompt-generated outputs and reusable image options';
+        case 'image_edit':
+            return 'Source image, edits, and image references';
+        case 'style_fit':
+            return 'Source image, style direction, and fitted outputs';
+        case 'variants':
+            return 'Source image and branchable visual alternatives';
+        default:
+            return 'Images in this session';
+    }
 }
 
 function getCanvasNodeLabel(node: MessageNode, images: CanvasImageRef[]): string {
@@ -805,8 +826,222 @@ function ImagePreviewOverlay({
     );
 }
 
+interface WorkspaceImageCardProps {
+    artifact: ImageFileArtifact;
+    isSource: boolean;
+    onPreview: (artifactId: string) => void;
+    onUseAsSource: (artifactId: string) => void;
+    onFitStyle: (artifactId: string) => void;
+    onMakeVariants: (artifactId: string) => void;
+    onUseAsReference: (artifactId: string) => void;
+}
+
+function WorkspaceImageCard({
+    artifact,
+    isSource,
+    onPreview,
+    onUseAsSource,
+    onFitStyle,
+    onMakeVariants,
+    onUseAsReference,
+}: WorkspaceImageCardProps) {
+    const imageSource = getImageSource(artifact);
+    const modelLabel = getImageModelDisplayName(artifact.model);
+
+    return (
+        <div className={`overflow-hidden rounded-lg border bg-white shadow-sm ${
+            isSource ? 'border-blue-400 ring-2 ring-blue-100' : 'border-slate-200'
+        }`}>
+            <button
+                type="button"
+                onClick={() => onPreview(artifact.id)}
+                className="block aspect-[4/3] w-full bg-slate-100"
+                title="Open large preview"
+            >
+                {imageSource ? (
+                    <img
+                        src={imageSource}
+                        alt={artifact.label ?? artifact.name}
+                        className="h-full w-full object-cover"
+                        loading="lazy"
+                    />
+                ) : (
+                    <div className="flex h-full w-full items-center justify-center text-slate-300">
+                        <ImageIcon className="h-8 w-8" />
+                    </div>
+                )}
+            </button>
+            <div className="space-y-3 p-3">
+                <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                        <div className="truncate text-sm font-semibold text-slate-800">
+                            {artifact.label ?? artifact.name}
+                        </div>
+                        {isSource && (
+                            <span className="shrink-0 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-blue-700">
+                                Source
+                            </span>
+                        )}
+                    </div>
+                    <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-slate-400">
+                        <span>{artifact.origin}</span>
+                        {modelLabel && <span>{modelLabel}</span>}
+                        {artifact.sizeBytes && <span>{formatBytes(artifact.sizeBytes)}</span>}
+                    </div>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                        type="button"
+                        onClick={() => onUseAsSource(artifact.id)}
+                        className="inline-flex items-center justify-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] font-semibold text-slate-700 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                    >
+                        <Pencil className="h-3 w-3" />
+                        Source
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => onFitStyle(artifact.id)}
+                        className="inline-flex items-center justify-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] font-semibold text-slate-700 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                    >
+                        <Sparkles className="h-3 w-3" />
+                        Fit Style
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => onMakeVariants(artifact.id)}
+                        className="inline-flex items-center justify-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] font-semibold text-slate-700 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                    >
+                        <RotateCcw className="h-3 w-3" />
+                        Variants
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => onUseAsReference(artifact.id)}
+                        className="inline-flex items-center justify-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] font-semibold text-slate-700 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                    >
+                        <ImageIcon className="h-3 w-3" />
+                        Reference
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function ImageWorkspace({ onPreview }: { onPreview: (artifactId: string) => void }) {
+    const {
+        artifacts,
+        canvasSelectedArtifactIds,
+        canvasSelectedArtifactUse,
+        setCanvasArtifactSelection,
+        setSessionIntent,
+        sessionIntent,
+    } = useGraphStore();
+    const imageArtifacts = useMemo(
+        () => Object.values(artifacts)
+            .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+        [artifacts],
+    );
+    const generatedArtifacts = imageArtifacts.filter((artifact) => artifact.origin === 'generated');
+    const sourceArtifactIds = new Set(
+        canvasSelectedArtifactUse === 'edit_target' ? canvasSelectedArtifactIds : [],
+    );
+    const sourceArtifacts = imageArtifacts.filter((artifact) => sourceArtifactIds.has(artifact.id));
+
+    const selectArtifactForIntent = useCallback((artifactId: string, intent: SessionIntent) => {
+        setSessionIntent(intent);
+        setCanvasArtifactSelection([artifactId], 'edit_target');
+    }, [setCanvasArtifactSelection, setSessionIntent]);
+
+    const handleUseAsReference = useCallback((artifactId: string) => {
+        setCanvasArtifactSelection([artifactId], 'context');
+    }, [setCanvasArtifactSelection]);
+
+    return (
+        <div className="flex h-full flex-col bg-slate-50 text-slate-900">
+            <div className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-2">
+                <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                        <ImageIcon className="h-4 w-4 text-blue-600" />
+                        <h2 className="truncate text-sm font-semibold">Image Workspace</h2>
+                    </div>
+                    <p className="truncate text-xs text-slate-400">{getWorkspaceSubtitle(sessionIntent)}</p>
+                </div>
+                <div className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
+                    {imageArtifacts.length} image{imageArtifacts.length === 1 ? '' : 's'}
+                </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                {sourceArtifacts.length > 0 && (
+                    <div className="mb-5">
+                        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            <Check className="h-3.5 w-3.5 text-blue-600" />
+                            Source
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                            {sourceArtifacts.map((artifact) => (
+                                <WorkspaceImageCard
+                                    key={artifact.id}
+                                    artifact={artifact}
+                                    isSource
+                                    onPreview={onPreview}
+                                    onUseAsSource={(artifactId) => selectArtifactForIntent(artifactId, 'image_edit')}
+                                    onFitStyle={(artifactId) => selectArtifactForIntent(artifactId, 'style_fit')}
+                                    onMakeVariants={(artifactId) => selectArtifactForIntent(artifactId, 'variants')}
+                                    onUseAsReference={handleUseAsReference}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {imageArtifacts.length === 0 ? (
+                    <div className="flex min-h-full items-center justify-center p-8">
+                        <div className="max-w-sm text-center">
+                            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-300">
+                                <ImageIcon className="h-5 w-5" />
+                            </div>
+                            <h3 className="mt-4 text-sm font-semibold text-slate-700">No images yet</h3>
+                            <p className="mt-1 text-sm text-slate-500">Generate, upload, or choose an image to start building variants.</p>
+                        </div>
+                    </div>
+                ) : (
+                    <div>
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                <Sparkles className="h-3.5 w-3.5 text-blue-600" />
+                                Outputs
+                            </div>
+                            {generatedArtifacts.length > 0 && (
+                                <span className="text-xs text-slate-400">
+                                    {generatedArtifacts.length} generated
+                                </span>
+                            )}
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                            {imageArtifacts.map((artifact) => (
+                                <WorkspaceImageCard
+                                    key={artifact.id}
+                                    artifact={artifact}
+                                    isSource={sourceArtifactIds.has(artifact.id)}
+                                    onPreview={onPreview}
+                                    onUseAsSource={(artifactId) => selectArtifactForIntent(artifactId, 'image_edit')}
+                                    onFitStyle={(artifactId) => selectArtifactForIntent(artifactId, 'style_fit')}
+                                    onMakeVariants={(artifactId) => selectArtifactForIntent(artifactId, 'variants')}
+                                    onUseAsReference={handleUseAsReference}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 export function ImageCanvas() {
-    const { artifacts } = useGraphStore();
+    const { artifacts, sessionIntent } = useGraphStore();
     const [previewArtifactId, setPreviewArtifactId] = useState<string | null>(null);
     const previewArtifact = previewArtifactId ? artifacts[previewArtifactId] : undefined;
     const previewSource = previewArtifact ? getImageSource(previewArtifact) : '';
@@ -815,8 +1050,14 @@ export function ImageCanvas() {
     }, []);
 
     return (
-        <ReactFlowProvider>
-            <ArtifactFlow onPreview={handlePreview} />
+        <>
+            {isImageWorkspaceIntent(sessionIntent) ? (
+                <ImageWorkspace onPreview={handlePreview} />
+            ) : (
+                <ReactFlowProvider>
+                    <ArtifactFlow onPreview={handlePreview} />
+                </ReactFlowProvider>
+            )}
             {previewArtifact && (
                 <ImagePreviewOverlay
                     artifact={previewArtifact}
@@ -824,6 +1065,6 @@ export function ImageCanvas() {
                     onClose={() => setPreviewArtifactId(null)}
                 />
             )}
-        </ReactFlowProvider>
+        </>
     );
 }

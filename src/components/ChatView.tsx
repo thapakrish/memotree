@@ -1,7 +1,7 @@
 import { lazy, startTransition, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, FileText, Music, ScanText, ArrowRight, Sparkles, RotateCcw, Pencil, Images } from 'lucide-react';
 import { useGraphStore } from '../store/useGraphStore';
-import type { AssistantResponseMode, AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, ImageArtifact, ImageFileArtifact, MessageNode, SessionIntent } from '../store/types';
+import type { AssistantResponseMode, AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, ImageArtifact, ImageFileArtifact, ImageFileUse, MessageNode, SessionIntent } from '../store/types';
 import type { IProvider, ProviderFunctionCall, StreamDelta } from '../lib/providers';
 import { createProvider } from '../lib/providers';
 import { appendEvent, getFinalAnswerText, getImageArtifacts, getNodeSummary, mergeEvents } from '../lib/chatEvents';
@@ -458,7 +458,7 @@ function requiresSourceImage(intent: SessionIntent): boolean {
     return intent === 'image_edit' || intent === 'style_fit' || intent === 'variants';
 }
 
-function getIntentAttachmentUse(intent: SessionIntent): AttachmentPart['use'] {
+function getIntentAttachmentUse(intent: SessionIntent): ImageFileUse {
     return requiresSourceImage(intent) ? 'edit_target' : 'context';
 }
 
@@ -784,6 +784,8 @@ export function ChatView() {
         artifacts,
         markImageArtifactsStored,
         canvasSelectedArtifactIds,
+        canvasSelectedArtifactUse,
+        setCanvasArtifactSelectionUse,
         clearCanvasArtifactSelection,
         isSaving,
         lastSavedAt,
@@ -1032,8 +1034,8 @@ export function ChatView() {
         [attachments],
     );
     const selectedCanvasDraftAttachments = useMemo(
-        () => createAttachmentsFromArtifacts(canvasSelectedArtifactIds, artifacts, attachedArtifactIds, 'edit_target'),
-        [artifacts, attachedArtifactIds, canvasSelectedArtifactIds],
+        () => createAttachmentsFromArtifacts(canvasSelectedArtifactIds, artifacts, attachedArtifactIds, canvasSelectedArtifactUse),
+        [artifacts, attachedArtifactIds, canvasSelectedArtifactIds, canvasSelectedArtifactUse],
     );
     const selectedStyle = getStylePreset(selectedStyleId);
     const draftSourceImageCount = useMemo(
@@ -1043,7 +1045,7 @@ export function ChatView() {
     );
     const needsSourceImage = requiresSourceImage(sessionIntent);
 
-    const handleAddSelectedArtifacts = (use: AttachmentPart['use'] = getIntentAttachmentUse(sessionIntent)) => {
+    const handleAddSelectedArtifacts = (use: ImageFileUse = getIntentAttachmentUse(sessionIntent)) => {
         const parts = selectedArtifactIds
             .filter((artifactId) => !attachedArtifactIds.has(artifactId))
             .map((artifactId) => artifacts[artifactId])
@@ -1065,7 +1067,7 @@ export function ChatView() {
         closeArtifactPicker();
     };
 
-    const handleAddCanvasArtifacts = (use: AttachmentPart['use']) => {
+    const handleAddCanvasArtifacts = (use: ImageFileUse) => {
         const parts = createAttachmentsFromArtifacts(canvasSelectedArtifactIds, artifacts, attachedArtifactIds, use);
 
         if (parts.length === 0) {
@@ -1077,6 +1079,7 @@ export function ChatView() {
         if (use === 'edit_target') {
             handleSelectSessionIntent('image_edit');
         }
+        setCanvasArtifactSelectionUse(use);
         clearCanvasArtifactSelection();
         showStatus('info', `${formatImageCountLabel(parts.length, 'input')} added from the canvas.`);
         requestAnimationFrame(() => textareaRef.current?.focus());
@@ -1893,17 +1896,23 @@ export function ChatView() {
                                 <div className="flex min-w-0 flex-1 items-center gap-2 text-xs font-medium text-blue-800">
                                     <Images className="h-3.5 w-3.5 shrink-0" />
                                     <span className="truncate">
-                                        {canvasSelectedArtifactIds.length} canvas image{canvasSelectedArtifactIds.length === 1 ? '' : 's'} selected - next send uses as edit target
+                                        {canvasSelectedArtifactIds.length} canvas image{canvasSelectedArtifactIds.length === 1 ? '' : 's'} selected - next send uses as {canvasSelectedArtifactUse === 'edit_target' ? 'source' : 'reference'}
                                     </span>
                                 </div>
                                 <button
-                                    onClick={() => handleAddCanvasArtifacts('context')}
+                                    onClick={() => {
+                                        setCanvasArtifactSelectionUse('context');
+                                        handleAddCanvasArtifacts('context');
+                                    }}
                                     className="rounded-md border border-blue-200 bg-white px-2 py-1 text-xs font-semibold text-blue-700 transition-colors hover:border-blue-300"
                                 >
                                     Context
                                 </button>
                                 <button
-                                    onClick={() => handleAddCanvasArtifacts('edit_target')}
+                                    onClick={() => {
+                                        setCanvasArtifactSelectionUse('edit_target');
+                                        handleAddCanvasArtifacts('edit_target');
+                                    }}
                                     className="rounded-md border border-amber-200 bg-white px-2 py-1 text-xs font-semibold text-amber-700 transition-colors hover:border-amber-300"
                                 >
                                     Edit
