@@ -14,6 +14,10 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
     Check,
     FolderTree,
     GitBranch,
@@ -29,7 +33,7 @@ import {
     SquareDashedMousePointer,
     X,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { getImageArtifacts } from '../lib/chatEvents';
 import { getImageSource } from '../lib/artifactStorage';
@@ -48,6 +52,18 @@ const COMPACT_IMAGE_NODE_HEIGHT = 126;
 const IMAGE_WORKSPACE_INTENTS = new Set<SessionIntent>(['image_generate', 'image_edit', 'style_fit', 'variants']);
 
 type ImageCanvasView = 'workspace' | 'timeline';
+
+interface ImagePreviewNavigation {
+    nodeLabel: string;
+    nodeSummary: string;
+    imagePositionLabel: string;
+    nodePositionLabel: string;
+    sameNodeImages: ImageFileArtifact[];
+    previousImageId?: string;
+    nextImageId?: string;
+    previousNodeImageId?: string;
+    nextNodeImageId?: string;
+}
 
 function formatBytes(bytes?: number): string {
     if (!bytes) return '';
@@ -129,6 +145,61 @@ function getNodeImageRefs(
     }
 
     return refs;
+}
+
+function getNodeSummaryText(node: MessageNode): string {
+    const text = node.summary ?? node.content;
+    if (!text) {
+        return node.role === 'assistant' ? 'Assistant response' : 'User prompt';
+    }
+
+    return text.length > 96 ? `${text.slice(0, 93)}...` : text;
+}
+
+function buildImagePreviewNavigation(
+    nodes: Record<string, MessageNode>,
+    artifacts: Record<string, ImageFileArtifact>,
+    artifactId: string,
+): ImagePreviewNavigation | undefined {
+    const imageNodes = Object.values(nodes)
+        .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
+        .map((node) => ({
+            node,
+            images: getNodeImageRefs(node, artifacts),
+        }))
+        .filter(({ images }) => images.length > 0);
+
+    const nodeIndex = imageNodes.findIndex(({ images }) =>
+        images.some(({ artifact }) => artifact.id === artifactId),
+    );
+
+    if (nodeIndex < 0) {
+        return undefined;
+    }
+
+    const current = imageNodes[nodeIndex];
+    const imageIndex = current.images.findIndex(({ artifact }) => artifact.id === artifactId);
+    const sameNodeArtifacts = current.images.map(({ artifact }) => artifact);
+    const pickNodeImage = (targetNodeIndex: number) => {
+        const targetNode = imageNodes[targetNodeIndex];
+        if (!targetNode) {
+            return undefined;
+        }
+
+        return targetNode.images[Math.min(imageIndex, targetNode.images.length - 1)]?.artifact.id;
+    };
+
+    return {
+        nodeLabel: getCanvasNodeLabel(current.node, current.images),
+        nodeSummary: getNodeSummaryText(current.node),
+        imagePositionLabel: `${imageIndex + 1} of ${current.images.length}`,
+        nodePositionLabel: `${nodeIndex + 1} of ${imageNodes.length}`,
+        sameNodeImages: sameNodeArtifacts,
+        previousImageId: current.images[imageIndex - 1]?.artifact.id,
+        nextImageId: current.images[imageIndex + 1]?.artifact.id,
+        previousNodeImageId: pickNodeImage(nodeIndex - 1),
+        nextNodeImageId: pickNodeImage(nodeIndex + 1),
+    };
 }
 
 function collectNodeSubtreeIds(nodes: Record<string, MessageNode>, rootIds: string[]): Set<string> {
@@ -822,37 +893,170 @@ function ImageCanvasViewSwitch({
 function ImagePreviewOverlay({
     artifact,
     imageSource,
+    navigation,
+    onNavigate,
     onClose,
 }: {
     artifact: ImageFileArtifact;
     imageSource: string;
+    navigation?: ImagePreviewNavigation;
+    onNavigate: (artifactId: string) => void;
     onClose: () => void;
 }) {
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const navigateTo = useCallback((artifactId?: string) => {
+        if (artifactId) {
+            onNavigate(artifactId);
+        }
+    }, [onNavigate]);
+
+    useEffect(() => {
+        dialogRef.current?.focus();
+    }, []);
+
+    useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                onClose();
+                return;
+            }
+
+            if (!navigation) {
+                return;
+            }
+
+            if (event.key === 'ArrowLeft') {
+                event.preventDefault();
+                event.stopPropagation();
+                navigateTo(navigation.previousImageId);
+            } else if (event.key === 'ArrowRight') {
+                event.preventDefault();
+                event.stopPropagation();
+                navigateTo(navigation.nextImageId);
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                event.stopPropagation();
+                navigateTo(navigation.previousNodeImageId);
+            } else if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                event.stopPropagation();
+                navigateTo(navigation.nextNodeImageId);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [navigateTo, navigation, onClose]);
+
+    const navButtonClassName = 'inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-blue-300 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40';
+
     return createPortal(
         <div
             className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4"
             onClick={onClose}
         >
             <div
+                ref={dialogRef}
+                role="dialog"
+                aria-modal="true"
+                tabIndex={-1}
                 className="flex h-[94dvh] w-[96vw] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl"
                 onClick={(event) => event.stopPropagation()}
             >
-                <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-                    <div className="min-w-0">
+                <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                    <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-semibold text-slate-800">
                             {artifact.label ?? artifact.name}
                         </div>
-                        <div className="truncate text-xs text-slate-400">{artifact.path}</div>
+                        <div className="mt-0.5 flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-xs text-slate-400">
+                            {navigation ? (
+                                <>
+                                    <span className="truncate font-medium text-slate-500">{navigation.nodeLabel}</span>
+                                    <span>{navigation.imagePositionLabel}</span>
+                                    <span>Node {navigation.nodePositionLabel}</span>
+                                    <span className="truncate">{navigation.nodeSummary}</span>
+                                </>
+                            ) : (
+                                <span className="truncate">{artifact.path}</span>
+                            )}
+                        </div>
                     </div>
+                    {navigation && (
+                        <div className="flex shrink-0 items-center gap-2">
+                            <div className="inline-flex items-center gap-1 rounded-md border border-slate-100 bg-slate-50 p-1">
+                                <button
+                                    type="button"
+                                    onClick={() => navigateTo(navigation.previousNodeImageId)}
+                                    disabled={!navigation.previousNodeImageId}
+                                    className={navButtonClassName}
+                                    title="Previous image node"
+                                >
+                                    <ArrowUp className="h-4 w-4" />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => navigateTo(navigation.nextNodeImageId)}
+                                    disabled={!navigation.nextNodeImageId}
+                                    className={navButtonClassName}
+                                    title="Next image node"
+                                >
+                                    <ArrowDown className="h-4 w-4" />
+                                </button>
+                            </div>
+                            <div className="inline-flex items-center gap-1 rounded-md border border-slate-100 bg-slate-50 p-1">
+                                <button
+                                    type="button"
+                                    onClick={() => navigateTo(navigation.previousImageId)}
+                                    disabled={!navigation.previousImageId}
+                                    className={navButtonClassName}
+                                    title="Previous image in this node"
+                                >
+                                    <ArrowLeft className="h-4 w-4" />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => navigateTo(navigation.nextImageId)}
+                                    disabled={!navigation.nextImageId}
+                                    className={navButtonClassName}
+                                    title="Next image in this node"
+                                >
+                                    <ArrowRight className="h-4 w-4" />
+                                </button>
+                            </div>
+                        </div>
+                    )}
                     <button
+                        type="button"
                         onClick={onClose}
-                        className="rounded-md p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                        className="shrink-0 rounded-md p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
                         title="Close preview"
                     >
                         <X className="h-4 w-4" />
                     </button>
                 </div>
-                <div className="flex min-h-0 flex-1 items-center justify-center bg-slate-100 p-4">
+                <div className="relative flex min-h-0 flex-1 items-center justify-center bg-slate-100 p-4">
+                    {navigation?.previousImageId && (
+                        <button
+                            type="button"
+                            onClick={() => navigateTo(navigation.previousImageId)}
+                            className="absolute left-4 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/80 bg-white/90 text-slate-600 shadow-lg transition-colors hover:text-blue-700"
+                            title="Previous image in this node"
+                        >
+                            <ArrowLeft className="h-5 w-5" />
+                        </button>
+                    )}
+                    {navigation?.nextImageId && (
+                        <button
+                            type="button"
+                            onClick={() => navigateTo(navigation.nextImageId)}
+                            className="absolute right-4 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/80 bg-white/90 text-slate-600 shadow-lg transition-colors hover:text-blue-700"
+                            title="Next image in this node"
+                        >
+                            <ArrowRight className="h-5 w-5" />
+                        </button>
+                    )}
                     {imageSource ? (
                         <img
                             src={imageSource}
@@ -863,6 +1067,41 @@ function ImagePreviewOverlay({
                         <ImageIcon className="h-12 w-12 text-slate-300" />
                     )}
                 </div>
+                {navigation && navigation.sameNodeImages.length > 1 && (
+                    <div className="flex shrink-0 items-center gap-2 overflow-x-auto border-t border-slate-200 bg-white px-4 py-3">
+                        {navigation.sameNodeImages.map((image, index) => {
+                            const thumbnailSource = getImageSource(image);
+                            const isActive = image.id === artifact.id;
+                            return (
+                                <button
+                                    key={image.id}
+                                    type="button"
+                                    onClick={() => onNavigate(image.id)}
+                                    className={`relative h-16 w-20 shrink-0 overflow-hidden rounded-md border bg-slate-100 transition-colors ${
+                                        isActive ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200 hover:border-blue-300'
+                                    }`}
+                                    title={image.label ?? image.name}
+                                >
+                                    {thumbnailSource ? (
+                                        <img
+                                            src={thumbnailSource}
+                                            alt={image.label ?? image.name}
+                                            className="h-full w-full object-cover"
+                                            loading="lazy"
+                                        />
+                                    ) : (
+                                        <div className="flex h-full w-full items-center justify-center text-slate-300">
+                                            <ImageIcon className="h-5 w-5" />
+                                        </div>
+                                    )}
+                                    <span className="absolute bottom-1 left-1 rounded bg-white/90 px-1 text-[10px] font-semibold text-slate-600">
+                                        {index + 1}
+                                    </span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                )}
             </div>
         </div>,
         document.body,
@@ -1097,11 +1336,15 @@ function ImageWorkspace({
 }
 
 export function ImageCanvas() {
-    const { artifacts, sessionIntent } = useGraphStore();
+    const { artifacts, nodes: storeNodes, sessionIntent } = useGraphStore();
     const [imageCanvasView, setImageCanvasView] = useState<ImageCanvasView>('workspace');
     const [previewArtifactId, setPreviewArtifactId] = useState<string | null>(null);
     const previewArtifact = previewArtifactId ? artifacts[previewArtifactId] : undefined;
     const previewSource = previewArtifact ? getImageSource(previewArtifact) : '';
+    const previewNavigation = useMemo(
+        () => previewArtifactId ? buildImagePreviewNavigation(storeNodes, artifacts, previewArtifactId) : undefined,
+        [artifacts, previewArtifactId, storeNodes],
+    );
     const isImageIntent = isImageWorkspaceIntent(sessionIntent);
     const handlePreview = useCallback((artifactId: string) => {
         setPreviewArtifactId(artifactId);
@@ -1125,6 +1368,8 @@ export function ImageCanvas() {
                 <ImagePreviewOverlay
                     artifact={previewArtifact}
                     imageSource={previewSource}
+                    navigation={previewNavigation}
+                    onNavigate={setPreviewArtifactId}
                     onClose={() => setPreviewArtifactId(null)}
                 />
             )}
