@@ -9,6 +9,7 @@ import {
     SelectionMode,
     type Edge,
     type Node,
+    useReactFlow,
     useEdgesState,
     useNodesState,
 } from '@xyflow/react';
@@ -50,6 +51,17 @@ const COMPACT_NODE_WIDTH = 190;
 const COMPACT_NODE_HEIGHT = 78;
 const COMPACT_IMAGE_NODE_HEIGHT = 126;
 const IMAGE_WORKSPACE_INTENTS = new Set<SessionIntent>(['image_generate', 'image_edit', 'style_fit', 'variants']);
+const CANVAS_STARTER_INTENTS: Array<{
+    intent: SessionIntent;
+    label: string;
+    tone: string;
+}> = [
+    { intent: 'ask', label: 'Ask', tone: 'border-blue-300 bg-blue-50 text-blue-700' },
+    { intent: 'image_generate', label: 'Generate Image', tone: 'border-cyan-300 bg-cyan-50 text-cyan-800' },
+    { intent: 'image_edit', label: 'Edit Image', tone: 'border-amber-300 bg-amber-50 text-amber-800' },
+    { intent: 'style_fit', label: 'Fit Style', tone: 'border-violet-300 bg-violet-50 text-violet-800' },
+    { intent: 'variants', label: 'Explore Variants', tone: 'border-rose-300 bg-rose-50 text-rose-800' },
+];
 
 type ImageCanvasView = 'workspace' | 'timeline';
 
@@ -89,6 +101,26 @@ function getWorkspaceSubtitle(intent?: SessionIntent): string {
         default:
             return 'Images in this session';
     }
+}
+
+function getStarterIcon(intent: SessionIntent) {
+    switch (intent) {
+        case 'ask':
+            return <MessageSquare className="h-4 w-4" />;
+        case 'image_generate':
+            return <ImageIcon className="h-4 w-4" />;
+        case 'image_edit':
+            return <Pencil className="h-4 w-4" />;
+        case 'style_fit':
+            return <Sparkles className="h-4 w-4" />;
+        case 'variants':
+            return <RotateCcw className="h-4 w-4" />;
+    }
+}
+
+function openComposerForCanvasStart() {
+    window.dispatchEvent(new Event('memotree:open-chat'));
+    window.dispatchEvent(new Event('memotree:focus-composer'));
 }
 
 function getCanvasNodeLabel(node: MessageNode, images: CanvasImageRef[]): string {
@@ -241,6 +273,7 @@ interface CanvasTurnNodeData {
     isOnActivePath: boolean;
     groups: ContextGroup[];
     selectedArtifactIds: string[];
+    layoutSize: { width: number; height: number };
     onActivate: (nodeId: string) => void;
     onPreview: (artifactId: string) => void;
     onToggleSelection: (artifactId: string) => void;
@@ -513,6 +546,7 @@ function ArtifactFlow({ onPreview, headerActions }: ArtifactFlowProps) {
     const [isSelectionMode, setIsSelectionMode] = useState(false);
     const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
     const [isGrouping, setIsGrouping] = useState(false);
+    const { fitBounds, setCenter } = useReactFlow();
 
     const activePathIds = useMemo(
         () => new Set(getPath(activeNodeId).map((node) => node.id)),
@@ -637,6 +671,60 @@ function ArtifactFlow({ onPreview, headerActions }: ArtifactFlowProps) {
         setRfEdges(flowEdges);
     }, [flowEdges, flowNodes, setRfEdges, setRfNodes]);
 
+    const centerActiveNode = useCallback(() => {
+        if (!activeNodeId || rfNodes.length === 0) {
+            return;
+        }
+
+        const activeNode = rfNodes.find((node) => node.id === activeNodeId);
+        if (!activeNode) {
+            return;
+        }
+
+        const data = activeNode.data as { layoutSize?: { width: number; height: number } };
+        const width = data.layoutSize?.width ?? CANVAS_NODE_WIDTH;
+        const height = data.layoutSize?.height ?? CANVAS_NODE_HEIGHT;
+        const isMobile = window.matchMedia('(max-width: 767px)').matches;
+        if (isMobile) {
+            requestAnimationFrame(() => {
+                void fitBounds(
+                    {
+                        x: activeNode.position.x,
+                        y: activeNode.position.y,
+                        width,
+                        height,
+                    },
+                    { padding: 0.18, duration: 420 },
+                );
+            });
+            return;
+        }
+
+        requestAnimationFrame(() => {
+            void setCenter(
+                activeNode.position.x + width / 2,
+                activeNode.position.y + height / 2,
+                { zoom: 0.85, duration: 420 },
+            );
+        });
+    }, [activeNodeId, fitBounds, rfNodes, setCenter]);
+
+    useEffect(() => {
+        centerActiveNode();
+    }, [centerActiveNode]);
+
+    useEffect(() => {
+        const handleCanvasVisible = () => {
+            window.setTimeout(centerActiveNode, 80);
+        };
+        window.addEventListener('memotree:canvas-visible', handleCanvasVisible);
+        window.addEventListener('resize', handleCanvasVisible);
+        return () => {
+            window.removeEventListener('memotree:canvas-visible', handleCanvasVisible);
+            window.removeEventListener('resize', handleCanvasVisible);
+        };
+    }, [centerActiveNode]);
+
     const handleNodeDragStop = useCallback((_event: React.MouseEvent, node: Node) => {
         setUiPosition(node.id, node.position);
     }, [setUiPosition]);
@@ -710,7 +798,7 @@ function ArtifactFlow({ onPreview, headerActions }: ArtifactFlowProps) {
                         {imageNodeCount} image artifact{imageNodeCount === 1 ? '' : 's'} in this graph
                     </p>
                 </div>
-                <div className="flex flex-wrap items-center justify-end gap-2">
+                <div className="flex min-w-0 flex-nowrap items-center justify-end gap-2 overflow-x-auto sm:flex-wrap sm:overflow-visible">
                     {headerActions}
                     {canUseOrganizationTools && (
                         <>
@@ -723,9 +811,10 @@ function ArtifactFlow({ onPreview, headerActions }: ArtifactFlowProps) {
                                         : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700'
                                 }`}
                                 title="Select canvas nodes"
+                                aria-label="Select canvas nodes"
                             >
                                 {isSelectionMode ? <SquareDashedMousePointer className="h-3.5 w-3.5" /> : <MousePointer2 className="h-3.5 w-3.5" />}
-                                {isSelectionMode ? `${visibleSelectedNodeIds.length} selected` : 'Select'}
+                                <span className="hidden sm:inline">{isSelectionMode ? `${visibleSelectedNodeIds.length} selected` : 'Select'}</span>
                             </button>
                             <button
                                 type="button"
@@ -733,9 +822,10 @@ function ArtifactFlow({ onPreview, headerActions }: ArtifactFlowProps) {
                                 disabled={!activeNodeId}
                                 className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                                 title="Select the active path"
+                                aria-label="Select active path"
                             >
                                 <GitBranch className="h-3.5 w-3.5" />
-                                Path
+                                <span className="hidden sm:inline">Path</span>
                             </button>
                             <button
                                 type="button"
@@ -743,9 +833,10 @@ function ArtifactFlow({ onPreview, headerActions }: ArtifactFlowProps) {
                                 disabled={!activeNodeId}
                                 className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                                 title="Select the active subtree"
+                                aria-label="Select active subtree"
                             >
                                 <Network className="h-3.5 w-3.5" />
-                                Subtree
+                                <span className="hidden sm:inline">Subtree</span>
                             </button>
                             <button
                                 type="button"
@@ -753,9 +844,10 @@ function ArtifactFlow({ onPreview, headerActions }: ArtifactFlowProps) {
                                 disabled={visibleSelectedNodeIds.length === 0}
                                 className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                                 title="Group selected nodes"
+                                aria-label="Group selected nodes"
                             >
                                 <FolderTree className="h-3.5 w-3.5" />
-                                Group
+                                <span className="hidden sm:inline">Group</span>
                             </button>
                             <button
                                 type="button"
@@ -763,9 +855,10 @@ function ArtifactFlow({ onPreview, headerActions }: ArtifactFlowProps) {
                                 disabled={visibleSelectedNodeIds.length === 0}
                                 className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
                                 title="Hide selected nodes and their descendants from this canvas"
+                                aria-label="Prune selected nodes"
                             >
                                 <Scissors className="h-3.5 w-3.5" />
-                                Prune
+                                <span className="hidden sm:inline">Prune</span>
                             </button>
                             {canvasPrunedNodeIds.length > 0 && (
                                 <button
@@ -773,9 +866,10 @@ function ArtifactFlow({ onPreview, headerActions }: ArtifactFlowProps) {
                                     onClick={restoreCanvasPruning}
                                     className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50"
                                     title="Restore pruned canvas nodes"
+                                    aria-label="Restore pruned canvas nodes"
                                 >
                                     <RotateCcw className="h-3.5 w-3.5" />
-                                    Restore
+                                    <span className="hidden sm:inline">Restore</span>
                                 </button>
                             )}
                         </>
@@ -851,6 +945,122 @@ function ArtifactFlow({ onPreview, headerActions }: ArtifactFlowProps) {
     );
 }
 
+function CanvasStarterBoard() {
+    const { sessionIntent, setSessionIntent } = useGraphStore();
+
+    const handleStart = useCallback((intent: SessionIntent) => {
+        setSessionIntent(intent);
+        openComposerForCanvasStart();
+    }, [setSessionIntent]);
+
+    return (
+        <div className="relative h-full overflow-hidden bg-slate-50 text-slate-900">
+            <div className="absolute inset-0 bg-[linear-gradient(#e2e8f0_1px,transparent_1px),linear-gradient(90deg,#e2e8f0_1px,transparent_1px)] bg-[size:28px_28px]" />
+            <div className="absolute inset-0 bg-white/65" />
+            <div className="relative flex h-full min-h-0 flex-col">
+                <div className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white/92 px-4 py-2 backdrop-blur">
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                            <GitBranch className="h-4 w-4 text-blue-600" />
+                            <h2 className="truncate text-sm font-semibold">New Board</h2>
+                        </div>
+                        <p className="truncate text-xs text-slate-400">MemoTree</p>
+                    </div>
+                </div>
+
+                <div className="relative min-h-0 flex-1 p-4 sm:p-8">
+                    <div className="mx-auto grid h-full max-w-5xl items-center gap-5 lg:grid-cols-[minmax(260px,0.78fr)_minmax(420px,1.22fr)]">
+                        <div className="order-2 grid gap-2 sm:grid-cols-2 lg:order-1 lg:grid-cols-1">
+                            {CANVAS_STARTER_INTENTS.map((item) => {
+                                const isActive = sessionIntent === item.intent;
+                                return (
+                                    <button
+                                        key={item.intent}
+                                        type="button"
+                                        onClick={() => handleStart(item.intent)}
+                                        className={`group flex min-h-14 items-center justify-between gap-3 rounded-lg border bg-white px-3 py-3 text-left shadow-sm transition-colors hover:border-blue-300 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                                            isActive ? 'border-blue-400 ring-2 ring-blue-100' : 'border-slate-200'
+                                        }`}
+                                    >
+                                        <span className="flex min-w-0 items-center gap-3">
+                                            <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md border ${item.tone}`}>
+                                                {getStarterIcon(item.intent)}
+                                            </span>
+                                            <span className="truncate text-sm font-semibold text-slate-800">{item.label}</span>
+                                        </span>
+                                        <span className="h-2 w-2 shrink-0 rounded-full bg-slate-200 transition-colors group-hover:bg-blue-500" />
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        <div className="order-1 lg:order-2">
+                            <div className="relative mx-auto aspect-[4/3] w-full max-w-2xl">
+                                <svg className="absolute inset-0 h-full w-full" viewBox="0 0 640 480" aria-hidden="true">
+                                    <path d="M320 96 C320 164 222 172 222 238" fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" />
+                                    <path d="M320 96 C320 164 418 172 418 238" fill="none" stroke="#94a3b8" strokeWidth="3" strokeLinecap="round" />
+                                    <path d="M222 296 C222 360 304 360 304 414" fill="none" stroke="#a78bfa" strokeWidth="3" strokeDasharray="7 7" strokeLinecap="round" />
+                                    <path d="M418 296 C418 360 336 360 336 414" fill="none" stroke="#f59e0b" strokeWidth="3" strokeDasharray="7 7" strokeLinecap="round" />
+                                </svg>
+
+                                <div className="absolute left-1/2 top-10 w-44 -translate-x-1/2 rounded-lg border border-blue-200 bg-white p-3 shadow-sm">
+                                    <div className="flex items-center gap-2 text-xs font-semibold text-blue-700">
+                                        <MessageSquare className="h-3.5 w-3.5" />
+                                        Root
+                                    </div>
+                                    <div className="mt-2 h-2 rounded bg-slate-100" />
+                                    <div className="mt-1 h-2 w-2/3 rounded bg-slate-100" />
+                                </div>
+
+                                <div className="absolute left-[10%] top-[43%] w-52 rounded-lg border border-cyan-200 bg-white p-3 shadow-sm">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2 text-xs font-semibold text-cyan-800">
+                                            <ImageIcon className="h-3.5 w-3.5" />
+                                            Image
+                                        </div>
+                                        <span className="rounded bg-cyan-50 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-700">3</span>
+                                    </div>
+                                    <div className="mt-3 grid grid-cols-3 gap-1.5">
+                                        <div className="aspect-square rounded bg-gradient-to-br from-cyan-400 to-blue-600" />
+                                        <div className="aspect-square rounded bg-gradient-to-br from-violet-500 to-fuchsia-500" />
+                                        <div className="aspect-square rounded bg-gradient-to-br from-amber-400 to-rose-500" />
+                                    </div>
+                                </div>
+
+                                <div className="absolute right-[8%] top-[43%] w-52 rounded-lg border border-violet-200 bg-white p-3 shadow-sm">
+                                    <div className="flex items-center gap-2 text-xs font-semibold text-violet-800">
+                                        <Sparkles className="h-3.5 w-3.5" />
+                                        Style
+                                    </div>
+                                    <div className="mt-3 flex gap-1.5">
+                                        <div className="h-14 flex-1 rounded bg-slate-800" />
+                                        <div className="h-14 flex-1 rounded bg-slate-500" />
+                                        <div className="h-14 flex-1 rounded bg-slate-300" />
+                                    </div>
+                                </div>
+
+                                <div className="absolute bottom-3 left-1/2 w-56 -translate-x-1/2 rounded-lg border border-amber-200 bg-white p-3 shadow-sm">
+                                    <div className="flex items-center justify-between gap-2 text-xs font-semibold text-amber-800">
+                                        <span className="flex items-center gap-2">
+                                            <GitBranch className="h-3.5 w-3.5" />
+                                            Variants
+                                        </span>
+                                        <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px]">A/B</span>
+                                    </div>
+                                    <div className="mt-3 grid grid-cols-2 gap-2">
+                                        <div className="h-12 rounded border border-slate-200 bg-white" />
+                                        <div className="h-12 rounded border border-slate-200 bg-white" />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function ImageCanvasViewSwitch({
     value,
     onChange,
@@ -871,20 +1081,22 @@ function ImageCanvasViewSwitch({
                 onClick={() => onChange('workspace')}
                 className={buttonClassName('workspace')}
                 aria-pressed={value === 'workspace'}
+                aria-label="Images"
                 title="Show image workspace"
             >
                 <ImageIcon className="h-3.5 w-3.5" />
-                Images
+                <span className="hidden sm:inline">Images</span>
             </button>
             <button
                 type="button"
                 onClick={() => onChange('timeline')}
                 className={buttonClassName('timeline')}
                 aria-pressed={value === 'timeline'}
+                aria-label="Timeline"
                 title="Show node timeline"
             >
                 <GitBranch className="h-3.5 w-3.5" />
-                Timeline
+                <span className="hidden sm:inline">Timeline</span>
             </button>
         </div>
     );
@@ -1349,6 +1561,11 @@ export function ImageCanvas() {
     const handlePreview = useCallback((artifactId: string) => {
         setPreviewArtifactId(artifactId);
     }, []);
+    const isEmptyCanvas = Object.keys(storeNodes).length === 0 && Object.keys(artifacts).length === 0;
+
+    if (isEmptyCanvas) {
+        return <CanvasStarterBoard />;
+    }
 
     return (
         <>

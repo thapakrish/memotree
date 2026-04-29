@@ -82,6 +82,22 @@ function App() {
   }, [hydrateSession]);
 
   useEffect(() => {
+    const openChat = () => setMobileTab('chat');
+    window.addEventListener('memotree:open-chat', openChat);
+    return () => window.removeEventListener('memotree:open-chat', openChat);
+  }, []);
+
+  const handleMobileTabChange = (tab: MobileTab) => {
+    setMobileTab(tab);
+    if (tab === 'canvas') {
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new Event('resize'));
+        window.dispatchEvent(new Event('memotree:canvas-visible'));
+      });
+    }
+  };
+
+  useEffect(() => {
     if (!isHydrated) {
       return;
     }
@@ -148,7 +164,7 @@ function App() {
         >
           <CanvasSurface />
         </div>
-        <MobileTabBar tab={mobileTab} onChange={setMobileTab} />
+        <MobileTabBar tab={mobileTab} onChange={handleMobileTabChange} />
         {featureFlags.keyboardPowerTools && (
           <Suspense fallback={null}>
             <CommandPalette />

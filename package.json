@@ -9,6 +9,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:visual": "playwright test scratchpad/visual-inspection/memotree-visual.spec.ts --browser=chromium --reporter=line --workers=1",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -27,6 +28,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/vite": "^4.2.1",
     "@types/dagre": "^0.7.54",
     "@types/diff-match-patch": "^1.0.36",

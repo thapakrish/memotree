@@ -525,6 +525,28 @@ function buildImageWorkflowMetadata(
     };
 }
 
+function getActiveBranchSourceArtifactIds(path: MessageNode[]): string[] {
+    const ids = new Set<string>();
+
+    for (const node of [...path].reverse()) {
+        for (const artifactId of node.imageWorkflow?.sourceArtifactIds ?? []) {
+            ids.add(artifactId);
+        }
+
+        for (const attachment of node.attachments ?? []) {
+            if (attachment.kind === 'image' && attachment.use === 'edit_target' && attachment.artifactId) {
+                ids.add(attachment.artifactId);
+            }
+        }
+
+        if (ids.size > 0) {
+            return [...ids];
+        }
+    }
+
+    return [];
+}
+
 function getSessionIntentIcon(intent: SessionIntent) {
     switch (intent) {
         case 'ask':
@@ -1090,6 +1112,10 @@ export function ChatView() {
             .filter((artifact) => !artifact.sourceNodeId || pathNodeIds.has(artifact.sourceNodeId))
             .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
     }, [artifacts, path]);
+    const activeBranchSourceArtifactIds = useMemo(
+        () => getActiveBranchSourceArtifactIds(path),
+        [path],
+    );
     const attachedArtifactIds = useMemo(
         () => new Set(attachments.flatMap((attachment) => attachment.artifactId ? [attachment.artifactId] : [])),
         [attachments],
@@ -1098,13 +1124,24 @@ export function ChatView() {
         () => createAttachmentsFromArtifacts(canvasSelectedArtifactIds, artifacts, attachedArtifactIds, canvasSelectedArtifactUse),
         [artifacts, attachedArtifactIds, canvasSelectedArtifactIds, canvasSelectedArtifactUse],
     );
-    const selectedStyle = getStylePreset(selectedStyleId);
-    const draftSourceImageCount = useMemo(
-        () => [...attachments, ...selectedCanvasDraftAttachments]
-            .filter((attachment) => attachment.kind === 'image' && attachment.use === 'edit_target').length,
-        [attachments, selectedCanvasDraftAttachments],
+    const reservedDraftArtifactIds = useMemo(
+        () => new Set([...attachedArtifactIds, ...canvasSelectedArtifactIds]),
+        [attachedArtifactIds, canvasSelectedArtifactIds],
     );
+    const activeSourceDraftAttachments = useMemo(
+        () => requiresSourceImage(sessionIntent)
+            ? createAttachmentsFromArtifacts(activeBranchSourceArtifactIds, artifacts, reservedDraftArtifactIds, 'edit_target')
+            : [],
+        [activeBranchSourceArtifactIds, artifacts, reservedDraftArtifactIds, sessionIntent],
+    );
+    const selectedStyle = getStylePreset(selectedStyleId);
     const needsSourceImage = requiresSourceImage(sessionIntent);
+    const draftSourceImageCount = useMemo(
+        () => [...attachments, ...selectedCanvasDraftAttachments, ...activeSourceDraftAttachments]
+            .filter((attachment) => attachment.kind === 'image' && attachment.use === 'edit_target').length,
+        [activeSourceDraftAttachments, attachments, selectedCanvasDraftAttachments],
+    );
+    const isUsingActiveBranchSource = needsSourceImage && activeSourceDraftAttachments.length > 0;
 
     const handleAddSelectedArtifacts = (use: ImageFileUse = getIntentAttachmentUse(sessionIntent)) => {
         const parts = selectedArtifactIds
@@ -1151,7 +1188,7 @@ export function ChatView() {
     const acceptedSuggestionCount = visibleImportEnvelope?.suggestions?.filter((suggestion) => suggestion.status === 'accepted').length ?? 0;
     const pendingSuggestionCount = visibleImportEnvelope?.suggestions?.filter((suggestion) => suggestion.status !== 'accepted' && suggestion.status !== 'rejected').length ?? 0;
     const requestEstimate = useMemo(() => {
-        const draftAttachments = [...attachments, ...selectedCanvasDraftAttachments];
+        const draftAttachments = [...attachments, ...selectedCanvasDraftAttachments, ...activeSourceDraftAttachments];
         if (!provider || (!input.trim() && draftAttachments.length === 0)) {
             return null;
         }
@@ -1176,7 +1213,7 @@ export function ChatView() {
             + providerEstimate.attachmentTokens
             + conversationTokens
             + draftTokens;
-    }, [attachments, draftMemoryState, imageModelId, imageOutputCount, input, path, provider, responseMode, selectedCanvasDraftAttachments, selectedStyle, sessionIntent]);
+    }, [activeSourceDraftAttachments, attachments, draftMemoryState, imageModelId, imageOutputCount, input, path, provider, responseMode, selectedCanvasDraftAttachments, selectedStyle, sessionIntent]);
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -1203,6 +1240,14 @@ export function ChatView() {
         const timeout = window.setTimeout(() => setStatusMessage(null), 4000);
         return () => window.clearTimeout(timeout);
     }, [statusMessage]);
+
+    useEffect(() => {
+        const focusComposer = () => {
+            requestAnimationFrame(() => textareaRef.current?.focus());
+        };
+        window.addEventListener('memotree:focus-composer', focusComposer);
+        return () => window.removeEventListener('memotree:focus-composer', focusComposer);
+    }, []);
 
     useEffect(() => {
         if (selectedImageModelUsesImagen && responseMode !== 'image') {
@@ -1409,7 +1454,7 @@ export function ChatView() {
     };
 
     const handleSend = async () => {
-        const draftAttachments = [...attachments, ...selectedCanvasDraftAttachments];
+        const draftAttachments = [...attachments, ...selectedCanvasDraftAttachments, ...activeSourceDraftAttachments];
         if (!provider) return;
         if (requiresSourceImage(sessionIntent) && !hasEditTargetImage(draftAttachments)) {
             showStatus('error', 'Choose a source image first.');
@@ -2005,7 +2050,11 @@ export function ChatView() {
                                     <span className="truncate">
                                         Source image
                                         <span className={draftSourceImageCount > 0 ? 'ml-2 text-emerald-700' : 'ml-2 text-amber-700'}>
-                                            {draftSourceImageCount > 0 ? `${draftSourceImageCount} selected` : 'required'}
+                                            {isUsingActiveBranchSource
+                                                ? `${activeSourceDraftAttachments.length} from branch`
+                                                : draftSourceImageCount > 0
+                                                    ? `${draftSourceImageCount} selected`
+                                                    : 'required'}
                                         </span>
                                     </span>
                                 </div>
@@ -2267,7 +2316,7 @@ export function ChatView() {
                                     )}
                                     <button
                                         onClick={handleSend}
-                                        disabled={!input.trim() && attachments.length === 0 && selectedCanvasDraftAttachments.length === 0}
+                                        disabled={!input.trim() && attachments.length === 0 && selectedCanvasDraftAttachments.length === 0 && activeSourceDraftAttachments.length === 0}
                                         className="shrink-0 p-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors shadow-sm"
                                         title={requestEstimate !== null ? `Estimated next request size: ~${requestEstimate.toLocaleString()} tokens` : 'Send message'}
                                     >
