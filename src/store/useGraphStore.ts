@@ -26,6 +26,9 @@ interface GraphState extends ConversationGraph {
     sessionId: string;
     createdAt: string;
     isHydrated: boolean;
+    isSaving: boolean;
+    lastSavedAt: string | null;
+    saveError: string | null;
     selectedNodeIds: string[];
     canvasSelectedArtifactIds: string[];
     previewNodes: Record<string, MessageNode> | null;
@@ -391,6 +394,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     ...createEmptySessionState(),
     apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
     isHydrated: false,
+    isSaving: false,
+    lastSavedAt: null,
+    saveError: null,
     selectedNodeIds: [],
     canvasSelectedArtifactIds: [],
 
@@ -413,6 +419,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 createdAt: savedSession.createdAt,
                 apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
                 isHydrated: true,
+                isSaving: false,
+                lastSavedAt: savedSession.updatedAt,
+                saveError: null,
                 canvasSelectedArtifactIds: [],
                 previewNodes: null,
                 previewImportEnvelope: null,
@@ -426,6 +435,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             ...emptyState,
             apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
             isHydrated: true,
+            isSaving: false,
+            lastSavedAt: null,
+            saveError: null,
             canvasSelectedArtifactIds: [],
             previewNodes: null,
             previewImportEnvelope: null,
@@ -443,6 +455,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             imageModelId: get().imageModelId,
             imageOutputCount: get().imageOutputCount,
             isHydrated: true,
+            isSaving: false,
+            lastSavedAt: null,
+            saveError: null,
             selectedNodeIds: [],
             canvasSelectedArtifactIds: [],
         });
@@ -471,6 +486,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             createdAt: savedSession.createdAt,
             apiKey: get().apiKey,
             isHydrated: true,
+            isSaving: false,
+            lastSavedAt: savedSession.updatedAt,
+            saveError: null,
             selectedNodeIds: [],
             canvasSelectedArtifactIds: [],
             previewNodes: null,
@@ -497,6 +515,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             createdAt: validatedSession.createdAt,
             apiKey: get().apiKey,
             isHydrated: true,
+            isSaving: false,
+            lastSavedAt: validatedSession.updatedAt,
+            saveError: null,
             selectedNodeIds: [],
             canvasSelectedArtifactIds: [],
             previewNodes: null,
@@ -586,6 +607,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             createdAt,
             apiKey: get().apiKey,
             isHydrated: true,
+            isSaving: false,
+            lastSavedAt: null,
+            saveError: null,
             selectedNodeIds: [],
             canvasSelectedArtifactIds: [],
             previewNodes: null,
@@ -991,6 +1015,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 }));
 
 let lastSavedSnapshot = '';
+let saveSequence = 0;
 
 useGraphStore.subscribe((state) => {
     if (!state.isHydrated) {
@@ -1019,11 +1044,18 @@ useGraphStore.subscribe((state) => {
     }
 
     lastSavedSnapshot = snapshot;
+    const updatedAt = new Date().toISOString();
+    const sequence = ++saveSequence;
+
+    useGraphStore.setState({
+        isSaving: true,
+        saveError: null,
+    });
 
     void saveSession({
         id: state.sessionId,
         createdAt: state.createdAt,
-        updatedAt: new Date().toISOString(),
+        updatedAt,
         title: state.sessionTitle?.trim() || deriveSessionTitle({
             nodes: state.nodes,
             artifacts: state.artifacts,
@@ -1054,5 +1086,23 @@ useGraphStore.subscribe((state) => {
             activeNodeId: state.activeNodeId,
             importEnvelope: state.importEnvelope,
         },
+    }).then(() => {
+        if (sequence !== saveSequence) {
+            return;
+        }
+        useGraphStore.setState({
+            isSaving: false,
+            lastSavedAt: updatedAt,
+            saveError: null,
+        });
+    }).catch((error) => {
+        if (sequence !== saveSequence) {
+            return;
+        }
+        console.error('MemoTree session autosave failed:', error);
+        useGraphStore.setState({
+            isSaving: false,
+            saveError: error instanceof Error ? error.message : 'Autosave failed.',
+        });
     });
 });

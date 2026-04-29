@@ -5,12 +5,13 @@ import binascii
 import mimetypes
 import os
 import re
+import shutil
 from pathlib import Path
 
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
-from .models import ImageArtifactSaveRequest, ImageArtifactSaveResponse
+from .models import ImageArtifactSaveRequest, ImageArtifactSaveResponse, ImageArtifactsDeleteRequest, ImageArtifactsDeleteResponse
 
 
 SAFE_PATH_COMPONENT = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
@@ -78,3 +79,21 @@ async def get_image_artifact(artifact_id: str, file_name: str) -> FileResponse:
 
     media_type = mimetypes.guess_type(target_path.name)[0] or "application/octet-stream"
     return FileResponse(target_path, media_type=media_type, filename=target_path.name)
+
+
+async def delete_image_artifacts(request: ImageArtifactsDeleteRequest) -> ImageArtifactsDeleteResponse:
+    artifact_root = get_artifact_root()
+    artifact_ids = {validate_path_component(raw_artifact_id, "artifact id") for raw_artifact_id in request.artifactIds}
+    deleted_count = 0
+
+    for artifact_id in artifact_ids:
+        target_dir = ensure_child_path(artifact_root, artifact_root / "images" / artifact_id)
+        if not target_dir.exists():
+            continue
+        if not target_dir.is_dir():
+            raise HTTPException(status_code=400, detail="Artifact path is not a directory.")
+
+        shutil.rmtree(target_dir)
+        deleted_count += 1
+
+    return ImageArtifactsDeleteResponse(deletedCount=deleted_count)

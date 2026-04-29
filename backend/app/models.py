@@ -47,5 +47,13 @@ class ImageArtifactSaveResponse(BaseModel):
     sizeBytes: int
 
 
+class ImageArtifactsDeleteRequest(BaseModel):
+    artifactIds: list[str] = Field(min_length=1, max_length=500)
+
+
+class ImageArtifactsDeleteResponse(BaseModel):
+    deletedCount: int
+
+
 class ErrorResponse(BaseModel):
     error: str

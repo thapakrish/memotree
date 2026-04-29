@@ -1,5 +1,6 @@
 import { openDB } from 'idb';
-import type { ConversationGraph } from '../store/types';
+import type { AttachmentPart, ChatEvent, ConversationGraph, ImageArtifact, ImageFileArtifact, MessageNode } from '../store/types';
+import { deleteImageArtifactFiles, readImageUrlAsBase64 } from './artifactStorage';
 
 const DB_NAME = 'memotree';
 const DB_VERSION = 1;
@@ -13,6 +14,10 @@ export interface PersistedSession {
     updatedAt: string;
     title: string;
     graph: Omit<ConversationGraph, 'apiKey'>;
+}
+
+export interface DeleteSessionResult {
+    artifactCleanupError?: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -33,6 +38,178 @@ function isValidNodeRecord(value: unknown): boolean {
         typeof node.timestamp === 'string' &&
         (node.parentId === null || typeof node.parentId === 'string'),
     );
+}
+
+function collectSessionArtifactIds(session: PersistedSession): string[] {
+    const artifactIds = new Set(Object.keys(session.graph.artifacts ?? {}));
+
+    for (const node of Object.values(session.graph.nodes)) {
+        for (const attachment of node.attachments ?? []) {
+            if (attachment.kind === 'image' && attachment.artifactId) {
+                artifactIds.add(attachment.artifactId);
+            }
+        }
+
+        for (const event of node.events ?? []) {
+            if (event.kind === 'image_artifact') {
+                artifactIds.add(event.artifact.artifactId ?? event.artifact.id);
+            }
+        }
+    }
+
+    return [...artifactIds];
+}
+
+async function readArtifactData(url: string, label: string): Promise<string> {
+    try {
+        return await readImageUrlAsBase64(url);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'unknown error';
+        throw new Error(`Unable to embed image artifact "${label}" in the exported session: ${message}`);
+    }
+}
+
+async function resolveImageData(
+    image: Pick<ImageFileArtifact | ImageArtifact | AttachmentPart, 'data' | 'url'>,
+    artifacts: Record<string, ImageFileArtifact>,
+    dataByArtifactId: Map<string, string>,
+    artifactId?: string,
+    label = artifactId ?? 'image',
+): Promise<string | undefined> {
+    if (artifactId && dataByArtifactId.has(artifactId)) {
+        return dataByArtifactId.get(artifactId);
+    }
+
+    const storedArtifact = artifactId ? artifacts[artifactId] : undefined;
+    const data = image.data ?? storedArtifact?.data;
+    if (data) {
+        if (artifactId) {
+            dataByArtifactId.set(artifactId, data);
+        }
+        return data;
+    }
+
+    const url = image.url ?? storedArtifact?.url;
+    if (!url) {
+        return undefined;
+    }
+
+    const fetchedData = await readArtifactData(url, label);
+    if (artifactId) {
+        dataByArtifactId.set(artifactId, fetchedData);
+    }
+    return fetchedData;
+}
+
+async function hydrateAttachmentForExport(
+    attachment: AttachmentPart,
+    artifacts: Record<string, ImageFileArtifact>,
+    dataByArtifactId: Map<string, string>,
+): Promise<AttachmentPart> {
+    if (attachment.kind !== 'image' || attachment.data) {
+        return attachment;
+    }
+
+    const data = await resolveImageData(
+        attachment,
+        artifacts,
+        dataByArtifactId,
+        attachment.artifactId,
+        attachment.name ?? attachment.artifactId ?? attachment.id,
+    );
+    if (!data) {
+        throw new Error(`Image attachment "${attachment.name ?? attachment.artifactId ?? attachment.id}" is missing inline data and a readable file URL.`);
+    }
+
+    return { ...attachment, data };
+}
+
+async function hydrateEventForExport(
+    event: ChatEvent,
+    artifacts: Record<string, ImageFileArtifact>,
+    dataByArtifactId: Map<string, string>,
+): Promise<ChatEvent> {
+    if (event.kind !== 'image_artifact' || event.artifact.data) {
+        return event;
+    }
+
+    const artifactId = event.artifact.artifactId ?? event.artifact.id;
+    const data = await resolveImageData(
+        event.artifact,
+        artifacts,
+        dataByArtifactId,
+        artifactId,
+        event.artifact.label ?? artifactId,
+    );
+
+    if (!data) {
+        throw new Error(`Image artifact "${event.artifact.label ?? artifactId}" is missing inline data and a readable file URL.`);
+    }
+
+    return {
+        ...event,
+        artifact: {
+            ...event.artifact,
+            data,
+        },
+    };
+}
+
+async function hydrateNodeForExport(
+    node: MessageNode,
+    artifacts: Record<string, ImageFileArtifact>,
+    dataByArtifactId: Map<string, string>,
+): Promise<MessageNode> {
+    const attachments = node.attachments
+        ? await Promise.all(node.attachments.map((attachment) =>
+            hydrateAttachmentForExport(attachment, artifacts, dataByArtifactId),
+        ))
+        : node.attachments;
+    const events = node.events
+        ? await Promise.all(node.events.map((event) =>
+            hydrateEventForExport(event, artifacts, dataByArtifactId),
+        ))
+        : node.events;
+
+    return { ...node, attachments, events };
+}
+
+async function buildPortableSession(session: PersistedSession): Promise<PersistedSession> {
+    const graphArtifacts = session.graph.artifacts ?? {};
+    const dataByArtifactId = new Map<string, string>();
+    const artifacts = Object.fromEntries(
+        await Promise.all(Object.entries(graphArtifacts).map(async ([artifactId, artifact]) => {
+            const data = await resolveImageData(
+                artifact,
+                graphArtifacts,
+                dataByArtifactId,
+                artifactId,
+                artifact.name ?? artifactId,
+            );
+
+            if (!data) {
+                throw new Error(`Image artifact "${artifact.name ?? artifactId}" is missing inline data and a readable file URL.`);
+            }
+
+            return [artifactId, { ...artifact, data }];
+        })),
+    ) as Record<string, ImageFileArtifact>;
+
+    const nodes = Object.fromEntries(
+        await Promise.all(Object.entries(session.graph.nodes).map(async ([nodeId, node]) => [
+            nodeId,
+            await hydrateNodeForExport(node, artifacts, dataByArtifactId),
+        ])),
+    );
+
+    return {
+        ...session,
+        graph: {
+            ...session.graph,
+            artifacts,
+            nodes,
+        },
+    };
 }
 
 export function validatePersistedSession(data: unknown): PersistedSession {
@@ -152,26 +329,37 @@ export async function listSessions() {
     return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-export async function deleteSession(sessionId: string) {
+export async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
     const db = await getDb();
+    const session = (await db.get(SESSIONS_STORE, sessionId)) as PersistedSession | undefined;
+    const artifactIds = session ? collectSessionArtifactIds(session) : [];
     await db.delete(SESSIONS_STORE, sessionId);
 
     const lastSessionId = await db.get<string>(META_STORE, LAST_SESSION_KEY);
-    if (lastSessionId !== sessionId) {
-        return;
+    if (lastSessionId === sessionId) {
+        const remainingSessions = (await db.getAll(SESSIONS_STORE)) as PersistedSession[];
+        const nextLastSession = remainingSessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+        if (nextLastSession) {
+            await db.put(META_STORE, nextLastSession.id, LAST_SESSION_KEY);
+        } else {
+            await db.delete(META_STORE, LAST_SESSION_KEY);
+        }
     }
 
-    const remainingSessions = (await db.getAll(SESSIONS_STORE)) as PersistedSession[];
-    const nextLastSession = remainingSessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
-    if (nextLastSession) {
-        await db.put(META_STORE, nextLastSession.id, LAST_SESSION_KEY);
-    } else {
-        await db.delete(META_STORE, LAST_SESSION_KEY);
+    try {
+        await deleteImageArtifactFiles(artifactIds);
+        return {};
+    } catch (error) {
+        console.warn('Image artifact cleanup failed:', error);
+        return {
+            artifactCleanupError: error instanceof Error ? error.message : 'Image artifact cleanup failed.',
+        };
     }
 }
 
-export function exportSessionToFile(session: PersistedSession): void {
-    const json = JSON.stringify(session, null, 2);
+export async function exportSessionToFile(session: PersistedSession): Promise<void> {
+    const portableSession = await buildPortableSession(session);
+    const json = JSON.stringify(portableSession, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

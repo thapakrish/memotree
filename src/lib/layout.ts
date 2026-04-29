@@ -2,9 +2,6 @@ import dagre from 'dagre';
 import { Position, type Node, type Edge } from '@xyflow/react';
 import type { GraphUiPosition } from '../store/types';
 
-const dagreGraph = new dagre.graphlib.Graph();
-dagreGraph.setDefaultEdgeLabel(() => ({}));
-
 const nodeWidth = 250;
 const nodeHeight = 100;
 
@@ -23,6 +20,9 @@ export const getLayoutedElements = (
     savedPositions: Record<string, GraphUiPosition> = {},
     nodeSize: { width: number; height: number } = { width: nodeWidth, height: nodeHeight },
 ) => {
+    const dagreGraph = new dagre.graphlib.Graph();
+    dagreGraph.setDefaultEdgeLabel(() => ({}));
+
     const isHorizontal = direction === 'LR';
     dagreGraph.setGraph({ rankdir: direction });
 

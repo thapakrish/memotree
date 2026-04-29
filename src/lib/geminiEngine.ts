@@ -10,11 +10,11 @@ import {
     createPartFromFunctionResponse,
     createUserContent,
 } from '@google/genai';
-import type { AttachmentPart, ChatEvent, CompactionBlock, MessageNode, MemoryPatch } from '../store/types';
+import type { AttachmentPart, ChatEvent, CompactionBlock, MessageNode } from '../store/types';
 import type { ProviderRequestConfig } from './providers/types';
-import { computePatch, validateEaseMemory } from './memoryEngine';
 import { getFinalAnswerText, getImageArtifacts } from './chatEvents';
 import { stripGeneratedImagePlaceholders } from './generatedImagePlaceholders';
+export { interceptMemoryTool } from './memoryTool';
 import {
     DEFAULT_GEMINI_IMAGE_MODEL_ID,
     DEFAULT_GEMINI_TEXT_MODEL_ID,
@@ -97,32 +97,6 @@ export function getGeminiModelForRequest(requestConfig?: ProviderRequestConfig):
 function getImagenOutputCount(requestConfig?: ProviderRequestConfig): number {
     const count = Math.round(requestConfig?.imageOutputCount ?? DEFAULT_IMAGEN_OUTPUT_COUNT);
     return Math.min(4, Math.max(1, count));
-}
-
-export function interceptMemoryTool(
-    toolArgs: Record<string, string>,
-    currentMemoryState: string,
-): { updatedMemory: string; patch: MemoryPatch; validationError?: string } {
-    let newText = currentMemoryState;
-
-    if (toolArgs.command === 'create') {
-        newText = toolArgs.file_text || '{}';
-    } else if (toolArgs.command === 'str_replace') {
-        newText = currentMemoryState.replace(toolArgs.old_str, toolArgs.new_str);
-    }
-
-    // Validate EASE compliance before committing the patch
-    const validationError = validateEaseMemory(newText) ?? undefined;
-    if (validationError) {
-        // Return current state unchanged; caller should surface the error
-        return { updatedMemory: currentMemoryState, patch: { diffText: '' }, validationError };
-    }
-
-    const diffText = computePatch(currentMemoryState, newText);
-    return {
-        updatedMemory: newText,
-        patch: { diffText },
-    };
 }
 
 export function extractAssistantEvents(response: GenerateContentResponse): ChatEvent[] {
@@ -222,75 +196,126 @@ function formatUserTextForModel(text: string, attachments?: AttachmentPart[]): s
     ].join('\n');
 }
 
-function toModelParts(node: MessageNode): Part[] {
-    if (node.role !== 'assistant') {
-        const parts: Part[] = [{ text: formatUserTextForModel(node.content, node.attachments) }];
-        for (const [index, att] of (node.attachments ?? []).entries()) {
-            parts.push({ text: describeAttachmentForModel(att, index) });
-            if (att.data) {
-                parts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
-            }
+function eventToModelParts(event: ChatEvent): Part[] {
+    switch (event.kind) {
+        case 'thought':
+            return [{
+                text: event.text,
+                thought: true,
+                thoughtSignature: event.signature,
+            }];
+        case 'text': {
+            const text = stripGeneratedImagePlaceholders(event.text);
+            return text ? [{ text }] : [];
         }
-        return parts;
+        case 'tool_call':
+            return [{
+                functionCall: {
+                    id: event.callId,
+                    name: event.toolName,
+                    args: event.args,
+                },
+            }];
+        case 'tool_result':
+            return [];
+        case 'image_artifact':
+            return event.artifact.data
+                ? [{
+                    inlineData: {
+                        mimeType: event.artifact.mimeType,
+                        data: event.artifact.data,
+                    },
+                }]
+                : [];
     }
+}
 
-    const prefixParts: Part[] = node.mergeContext
+function toolResultToFunctionResponsePart(event: Extract<ChatEvent, { kind: 'tool_result' }>): Part {
+    return createPartFromFunctionResponse(
+        event.callId ?? '',
+        event.toolName,
+        event.status === 'success'
+            ? {
+                output: event.summary,
+                ...(event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+                    ? event.payload as Record<string, unknown>
+                    : event.payload !== undefined
+                        ? { payload: event.payload }
+                        : {}),
+            }
+            : {
+                error: event.summary,
+                ...(event.payload !== undefined ? { payload: event.payload } : {}),
+            },
+    );
+}
+
+function toUserParts(node: MessageNode): Part[] {
+    const parts: Part[] = [{ text: formatUserTextForModel(node.content, node.attachments) }];
+    for (const [index, att] of (node.attachments ?? []).entries()) {
+        parts.push({ text: describeAttachmentForModel(att, index) });
+        if (att.data) {
+            parts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
+        }
+    }
+    return parts;
+}
+
+function toAssistantContents(node: MessageNode): Content[] {
+    const contents: Content[] = [];
+    let modelParts: Part[] = node.mergeContext
         ? [{
             text: `<merge_context>\n${node.mergeContext.envelope}\n</merge_context>`,
         }]
         : [];
+    let functionResponseParts: Part[] = [];
+
+    const flushModelParts = () => {
+        if (modelParts.length === 0) {
+            return;
+        }
+        contents.push(createModelContent(modelParts));
+        modelParts = [];
+    };
+    const flushFunctionResponses = () => {
+        if (functionResponseParts.length === 0) {
+            return;
+        }
+        contents.push(createUserContent(functionResponseParts));
+        functionResponseParts = [];
+    };
 
     if (node.events && node.events.length > 0) {
-        return [
-            ...prefixParts,
-            ...node.events.flatMap<Part>((event) => {
-            switch (event.kind) {
-                case 'thought':
-                    return [{
-                        text: event.text,
-                        thought: true,
-                        thoughtSignature: event.signature,
-                    }];
-                case 'text': {
-                    const text = stripGeneratedImagePlaceholders(event.text);
-                    return text ? [{ text }] : [];
-                }
-                case 'tool_call':
-                    return [{
-                        functionCall: {
-                            id: event.callId,
-                            name: event.toolName,
-                            args: event.args,
-                        },
-                    }];
-                case 'tool_result':
-                    return [];
-                case 'image_artifact':
-                    return event.artifact.data
-                        ? [{
-                            inlineData: {
-                                mimeType: event.artifact.mimeType,
-                                data: event.artifact.data,
-                            },
-                        }]
-                        : [];
+        for (const event of node.events) {
+            if (event.kind === 'tool_result') {
+                flushModelParts();
+                functionResponseParts.push(toolResultToFunctionResponsePart(event));
+                continue;
             }
-            }),
-        ];
+
+            flushFunctionResponses();
+            modelParts.push(...eventToModelParts(event));
+        }
+        flushModelParts();
+        flushFunctionResponses();
+        return contents;
     }
 
-    return [...prefixParts, { text: node.content }];
+    if (node.content) {
+        modelParts.push({ text: node.content });
+    }
+    flushModelParts();
+    return contents;
 }
 
 function toGeminiContents(chatPath: MessageNode[]): Content[] {
     return chatPath.flatMap((node) => {
-        const parts = toModelParts(node);
-        return parts.length > 0
-            ? [{
-                role: node.role === 'assistant' ? 'model' : 'user',
-                parts,
-            }]
-            : [];
+        if (node.role === 'assistant') {
+            return toAssistantContents(node);
+        }
+
+        const parts = toUserParts(node);
+        return parts.length > 0 ? [createUserContent(parts)] : [];
     });
 }
 
@@ -365,13 +390,9 @@ export function buildGeminiContentsWithCompaction(
         } else if (compactedIds.has(node.id)) {
             i++;
         } else {
-            const parts = toModelParts(node);
-            if (parts.length > 0) {
-                contents.push({
-                    role: node.role === 'assistant' ? 'model' : 'user',
-                    parts,
-                });
-            }
+            contents.push(...(node.role === 'assistant'
+                ? toAssistantContents(node)
+                : [createUserContent(toUserParts(node))]));
             i++;
         }
     }
@@ -622,32 +643,7 @@ export function createModelToolCallContent(
     functionCalls: FunctionCall[],
 ): Content {
     const parts: Part[] = [
-        ...events.flatMap<Part>((event) => {
-            switch (event.kind) {
-                case 'thought':
-                    return [{
-                        text: event.text,
-                        thought: true,
-                        thoughtSignature: event.signature,
-                    }];
-                case 'text': {
-                    const text = stripGeneratedImagePlaceholders(event.text);
-                    return text ? [{ text }] : [];
-                }
-                case 'tool_call':
-                case 'tool_result':
-                    return [];
-                case 'image_artifact':
-                    return event.artifact.data
-                        ? [{
-                            inlineData: {
-                                mimeType: event.artifact.mimeType,
-                                data: event.artifact.data,
-                            },
-                        }]
-                        : [];
-            }
-        }),
+        ...events.flatMap((event) => event.kind === 'tool_result' || event.kind === 'tool_call' ? [] : eventToModelParts(event)),
         ...functionCalls.map((call) => ({
             functionCall: {
                 id: call.id,
@@ -670,6 +666,18 @@ export function createFunctionResponseContent(
     ));
 
     return createUserContent(parts);
+}
+
+export function buildAssistantEventContents(events: ChatEvent[]): Content[] {
+    return toAssistantContents({
+        id: 'assistant-events',
+        parentId: null,
+        role: 'assistant',
+        content: '',
+        memoryPatches: [],
+        timestamp: new Date(0).toISOString(),
+        events,
+    });
 }
 
 export function getAssistantText(events: ChatEvent[]): string {

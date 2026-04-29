@@ -16,10 +16,11 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
     const [isImportOpen, setIsImportOpen] = useState(false);
     const [importError, setImportError] = useState<string | null>(null);
     const [isImportingFile, setIsImportingFile] = useState(false);
+    const [exportingSessionId, setExportingSessionId] = useState<string | null>(null);
     const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
     const [editingTitle, setEditingTitle] = useState('');
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const { createNewSession, loadSessionById, loadSessionFromData, sessionId, setSessionTitle } = useGraphStore();
+    const { createNewSession, loadSessionById, loadSessionFromData, sessionId, setSessionTitle, lastSavedAt } = useGraphStore();
 
     useEffect(() => {
         if (!isOpen) {
@@ -30,7 +31,7 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
             setSessions(allSessions);
             setLastSessionId(lastSession?.id ?? null);
         });
-    }, [isOpen, sessionId]);
+    }, [isOpen, sessionId, lastSavedAt]);
 
     const refreshSessions = () => {
         void Promise.all([listSessions(), loadLastSession()]).then(([allSessions, lastSession]) => {
@@ -58,8 +59,24 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
     };
 
     const handleDeleteSession = async (sessionId: string) => {
-        await deleteSession(sessionId);
+        setImportError(null);
+        const result = await deleteSession(sessionId);
         refreshSessions();
+        if (result.artifactCleanupError) {
+            setImportError(`Session deleted, but image file cleanup failed: ${result.artifactCleanupError}`);
+        }
+    };
+
+    const handleExportSession = async (session: PersistedSession) => {
+        setImportError(null);
+        setExportingSessionId(session.id);
+        try {
+            await exportSessionToFile(session);
+        } catch (err) {
+            setImportError(err instanceof Error ? err.message : 'Export failed.');
+        } finally {
+            setExportingSessionId(null);
+        }
     };
 
     const startEditingSessionTitle = (session: PersistedSession) => {
@@ -155,12 +172,13 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
                     <div className="flex items-center gap-2">
                         {currentSession && (
                             <button
-                                onClick={() => exportSessionToFile(currentSession)}
+                                onClick={() => void handleExportSession(currentSession)}
+                                disabled={exportingSessionId !== null}
                                 className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700"
                                 title="Export current session to JSON file"
                             >
                                 <Download className="h-3.5 w-3.5" />
-                                Export current
+                                {exportingSessionId === currentSession.id ? 'Exporting...' : 'Export current'}
                             </button>
                         )}
                         <button
@@ -312,9 +330,10 @@ export function SessionsModal({ isOpen, onClose }: SessionsModalProps) {
                                             <span className="font-mono">{session.id.slice(0, 8)}</span>
                                         </div>
                                     </button>
-                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                                    <div className="flex shrink-0 items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100">
                                         <button
-                                            onClick={() => exportSessionToFile(session)}
+                                            onClick={() => void handleExportSession(session)}
+                                            disabled={exportingSessionId !== null}
                                             className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-200 hover:text-slate-600 transition-colors"
                                             title="Export session to file"
                                         >

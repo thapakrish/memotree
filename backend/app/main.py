@@ -4,10 +4,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .artifacts import get_image_artifact, save_image_artifact
+from .artifacts import delete_image_artifacts, get_image_artifact, save_image_artifact
 from .browser_import import close_browser
 from .importers import import_shared_chat_from_url
-from .models import ErrorResponse, ImageArtifactSaveRequest, ImageArtifactSaveResponse, SharedUrlImportRequest, SharedUrlImportResponse
+from .models import ErrorResponse, ImageArtifactSaveRequest, ImageArtifactSaveResponse, ImageArtifactsDeleteRequest, ImageArtifactsDeleteResponse, SharedUrlImportRequest, SharedUrlImportResponse
 
 
 app = FastAPI(title="MemoTree Import API")
@@ -73,3 +73,12 @@ async def save_image_artifact_endpoint(request: ImageArtifactSaveRequest) -> Ima
 )
 async def get_image_artifact_endpoint(artifact_id: str, file_name: str):
     return await get_image_artifact(artifact_id, file_name)
+
+
+@app.post(
+    "/api/artifacts/images/delete",
+    response_model=ImageArtifactsDeleteResponse,
+    responses={400: {"model": ErrorResponse}},
+)
+async def delete_image_artifacts_endpoint(request: ImageArtifactsDeleteRequest) -> ImageArtifactsDeleteResponse:
+    return await delete_image_artifacts(request)

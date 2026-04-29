@@ -1,22 +1,24 @@
-import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, startTransition, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, FileText, Music, ScanText, ArrowRight, Sparkles, RotateCcw, Pencil, Images } from 'lucide-react';
 import { useGraphStore } from '../store/useGraphStore';
 import type { AssistantResponseMode, AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, ImageArtifact, ImageFileArtifact, MessageNode } from '../store/types';
-import { getAssistantText, interceptMemoryTool } from '../lib/geminiEngine';
 import type { IProvider, ProviderFunctionCall, StreamDelta } from '../lib/providers';
 import { createProvider } from '../lib/providers';
 import { appendEvent, getFinalAnswerText, getImageArtifacts, getNodeSummary, mergeEvents } from '../lib/chatEvents';
 import { reconstructMemory } from '../lib/memoryEngine';
-import { SessionsModal } from './SessionsModal';
-import { ImportSuggestionsModal } from './ImportSuggestionsModal';
-import { MarkdownRenderer } from './MarkdownRenderer';
-import { ContextInspector } from './ContextInspector';
+import { interceptMemoryTool } from '../lib/memoryTool';
 import { featureFlags, isImageOnlyAttachmentMode } from '../config/featureFlags';
 import { buildImageArtifactFileName, buildImageArtifactPath } from '../lib/artifactFiles';
 import { getImageSource, readImageUrlAsBase64, saveImageArtifactFile } from '../lib/artifactStorage';
 import { stripGeneratedImagePlaceholders } from '../lib/generatedImagePlaceholders';
 import { DEFAULT_IMAGEN_OUTPUT_COUNT, getImageModelDisplayName, getImageModelOptions, isImagenModelId } from '../lib/geminiModels';
+import { hydrateAttachmentImageData, hydrateMessagePathImageData } from '../lib/hydrateImageData';
 import logoMark from '../assets/logo-mark.svg';
+
+const SessionsModal = lazy(() => import('./SessionsModal').then((module) => ({ default: module.SessionsModal })));
+const ImportSuggestionsModal = lazy(() => import('./ImportSuggestionsModal').then((module) => ({ default: module.ImportSuggestionsModal })));
+const MarkdownRenderer = lazy(() => import('./MarkdownRenderer').then((module) => ({ default: module.MarkdownRenderer })));
+const ContextInspector = lazy(() => import('./ContextInspector').then((module) => ({ default: module.ContextInspector })));
 
 function getTextSummary(text: string): string {
     return text.length > 40 ? `${text.slice(0, 40)}...` : text;
@@ -415,11 +417,19 @@ function CopyMessageButton({ text }: { text: string }) {
         <button
             onClick={handleCopy}
             title="Copy message"
-            className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-500 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 hover:text-slate-700"
+            className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-500 opacity-100 shadow-sm transition-opacity hover:text-slate-700 focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
         >
             {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
             {copied ? 'Copied' : failed ? 'Failed' : 'Copy'}
         </button>
+    );
+}
+
+function MarkdownText({ text, isStreaming }: { text: string; isStreaming?: boolean }) {
+    return (
+        <Suspense fallback={<div className="whitespace-pre-wrap">{text}</div>}>
+            <MarkdownRenderer text={text} isStreaming={isStreaming} />
+        </Suspense>
     );
 }
 
@@ -439,7 +449,7 @@ function AssistantMessageBody({
     const messageEvents = events ?? [];
 
     if (messageEvents.length === 0) {
-        return <MarkdownRenderer text={fallbackText} isStreaming={isStreaming} />;
+        return <MarkdownText text={fallbackText} isStreaming={isStreaming} />;
     }
 
     const lastTextIndex = messageEvents.reduce((last, event, i) =>
@@ -503,7 +513,7 @@ function AssistantMessageBody({
                             return null;
                         }
                         return (
-                            <MarkdownRenderer
+                            <MarkdownText
                                 key={`${event.kind}-${index}`}
                                 text={text}
                                 isStreaming={isStreaming && index === lastTextIndex}
@@ -594,6 +604,9 @@ export function ChatView() {
         markImageArtifactsStored,
         canvasSelectedArtifactIds,
         clearCanvasArtifactSelection,
+        isSaving,
+        lastSavedAt,
+        saveError,
     } = useGraphStore();
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
@@ -648,7 +661,7 @@ export function ChatView() {
 
     const handleReuseArtifact = (artifact: ImageArtifact) => {
         addAttachments([createAttachmentFromArtifact(artifact)]);
-        showStatus('info', 'Generated image added to the composer.');
+        showStatus('info', 'Generated image added to the next request.');
     };
 
     const handleEditArtifact = (artifact: ImageArtifact) => {
@@ -737,30 +750,17 @@ export function ChatView() {
     };
 
     const resolveAttachmentData = async (attachment: AttachmentPart): Promise<AttachmentPart> => {
-        if (attachment.kind !== 'image' || attachment.data) {
-            return attachment;
-        }
-
-        const artifactUrl = attachment.url ?? (attachment.artifactId ? artifacts[attachment.artifactId]?.url : undefined);
-        if (!artifactUrl) {
-            return attachment;
-        }
-
-        return {
-            ...attachment,
-            data: await readImageUrlAsBase64(artifactUrl),
-        };
+        return hydrateAttachmentImageData(attachment, {
+            artifacts,
+            readImageUrlAsBase64,
+        });
     };
 
-    const hydratePathImageAttachments = async (nodes: MessageNode[]): Promise<MessageNode[]> => {
-        return Promise.all(nodes.map(async (node) => {
-            if ((node.attachments?.length ?? 0) === 0) {
-                return node;
-            }
-
-            const attachments = await Promise.all(node.attachments!.map(resolveAttachmentData));
-            return { ...node, attachments };
-        }));
+    const hydratePathImageData = async (nodes: MessageNode[]): Promise<MessageNode[]> => {
+        return hydrateMessagePathImageData(nodes, {
+            artifacts,
+            readImageUrlAsBase64,
+        });
     };
 
     const persistNodeImageArtifacts = async (nodeId: string) => {
@@ -826,7 +826,7 @@ export function ChatView() {
 
         if (parts.length > 0) {
             addAttachments(parts);
-            showStatus('info', `${formatImageCountLabel(parts.length, 'input')} added to the composer.`);
+            showStatus('info', `${formatImageCountLabel(parts.length, 'input')} added to the next request.`);
         }
 
         closeArtifactPicker();
@@ -970,7 +970,7 @@ export function ChatView() {
 
         try {
             const newPath = getPath(userNodeId);
-            const hydratedPath = await hydratePathImageAttachments(newPath);
+            const hydratedPath = await hydratePathImageData(newPath);
             const memoryState = reconstructMemory(hydratedPath);
             const lastNode = hydratedPath[hydratedPath.length - 1];
             const requestedResponseMode = getEffectiveResponseMode(lastNode?.responseMode ?? 'text', lastNode?.attachments ?? [], imageModelId);
@@ -1084,7 +1084,7 @@ export function ChatView() {
 
             // Only save node if we got something (even if aborted mid-stream)
             if (events.length > 0) {
-                const assistantText = getAssistantText(events) || getNodeSummary({ role: 'assistant', events, content: '' });
+                const assistantText = getFinalAnswerText(events) || getNodeSummary({ role: 'assistant', events, content: '' });
                 const assistantNodeId = addNode({
                     parentId: userNodeId,
                     role: 'assistant',
@@ -1202,6 +1202,13 @@ export function ChatView() {
                 : event
         ))
         : [];
+    const saveStatusLabel = saveError
+        ? `Save failed: ${saveError}`
+        : isSaving
+            ? 'Saving...'
+            : lastSavedAt
+                ? `Saved ${new Date(lastSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                : null;
 
     return (
         <div className="w-full h-full flex flex-col bg-white border-r border-slate-200 shadow-sm z-20">
@@ -1236,21 +1243,23 @@ export function ChatView() {
                 </div>
             </div>
             {isInspectorOpen && (
-                <ContextInspector
-                    path={path}
-                    pendingInput={input}
-                    pendingAttachments={attachments}
-                    responseMode={responseMode}
-                    provider={provider}
-                    importEnvelope={visibleImportEnvelope ?? undefined}
-                    compactions={compactions}
-                    isCompacting={isCompacting}
-                    canCompact={featureFlags.contextCompaction && getCompactionRange() !== null}
-                    onCompactPath={handleCompactPath}
-                    onRemoveCompaction={removeCompaction}
-                    showCompactionControls={featureFlags.contextCompaction}
-                    showImportProvenance={featureFlags.importProvenanceWarnings}
-                />
+                <Suspense fallback={<div className="border-b border-slate-100 bg-slate-50 px-4 py-3 text-xs text-slate-400">Loading context...</div>}>
+                    <ContextInspector
+                        path={path}
+                        pendingInput={input}
+                        pendingAttachments={attachments}
+                        responseMode={responseMode}
+                        provider={provider}
+                        importEnvelope={visibleImportEnvelope ?? undefined}
+                        compactions={compactions}
+                        isCompacting={isCompacting}
+                        canCompact={featureFlags.contextCompaction && getCompactionRange() !== null}
+                        onCompactPath={handleCompactPath}
+                        onRemoveCompaction={removeCompaction}
+                        showCompactionControls={featureFlags.contextCompaction}
+                        showImportProvenance={featureFlags.importProvenanceWarnings}
+                    />
+                </Suspense>
             )}
 
             <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50 scroll-smooth">
@@ -1452,7 +1461,7 @@ export function ChatView() {
                                 <button
                                     onClick={() => setActiveNode(msg.id)}
                                     title="Fork conversation from this node"
-                                    className={`absolute top-2 ${msg.role === 'user' ? '-left-10 text-slate-400 hover:text-blue-500' : '-right-10 text-slate-400 hover:text-blue-500'} opacity-0 group-hover:opacity-100 transition-opacity bg-white border border-slate-200 rounded-full p-1.5 shadow-sm`}
+                                    className={`absolute top-2 ${msg.role === 'user' ? '-left-10 text-slate-400 hover:text-blue-500' : '-right-10 text-slate-400 hover:text-blue-500'} rounded-full border border-slate-200 bg-white p-1.5 opacity-100 shadow-sm transition-opacity focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100`}
                                 >
                                     <CornerDownRight className="w-4 h-4" />
                                 </button>
@@ -1665,7 +1674,7 @@ export function ChatView() {
                                         )}
                                         <button
                                             onClick={() => removeAttachment(att.id)}
-                                            className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover/chip:opacity-100"
+                                            className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/50 opacity-100 transition-opacity focus-visible:opacity-100 sm:opacity-0 sm:group-hover/chip:opacity-100"
                                             title="Remove"
                                         >
                                             <X className="h-3 w-3 text-white" />
@@ -1848,10 +1857,15 @@ export function ChatView() {
                         </div>
                     </div>
                 )}
-                <div className="mt-2 text-center">
+                <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-center">
                     <span className="text-[11px] font-medium text-slate-400">
                         {activeNodeId ? 'Active Timeline Checkpoint: ' + activeNodeId.slice(0, 8) : 'No Node Selected'}
                     </span>
+                    {saveStatusLabel && (
+                        <span className={`max-w-full truncate text-[11px] font-medium ${saveError ? 'text-red-500' : 'text-slate-400'}`}>
+                            {saveStatusLabel}
+                        </span>
+                    )}
                 </div>
             </div>
             {isArtifactPickerOpen && (
@@ -1936,10 +1950,16 @@ export function ChatView() {
                     </div>
                 </div>
             )}
-            <SessionsModal isOpen={isSessionsOpen} onClose={() => setIsSessionsOpen(false)} />
-                {featureFlags.importInference && (
+            {isSessionsOpen && (
+                <Suspense fallback={null}>
+                    <SessionsModal isOpen={isSessionsOpen} onClose={() => setIsSessionsOpen(false)} />
+                </Suspense>
+            )}
+            {featureFlags.importInference && isSuggestionsOpen && (
+                <Suspense fallback={null}>
                     <ImportSuggestionsModal isOpen={isSuggestionsOpen} onClose={() => setIsSuggestionsOpen(false)} />
-                )}
+                </Suspense>
+            )}
         </div>
     );
 }

@@ -22,12 +22,12 @@ function CopyButton({ text }: { text: string }) {
         }
     };
 
-    return (
-        <button
-            onClick={handleCopy}
-            className="absolute right-2 top-2 flex items-center gap-1 rounded-md bg-slate-700 px-2 py-1 text-[11px] font-medium text-slate-300 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-slate-600 hover:text-white"
-            title="Copy code"
-        >
+	    return (
+	        <button
+	            onClick={handleCopy}
+	            className="absolute right-2 top-2 flex items-center gap-1 rounded-md bg-slate-700 px-2 py-1 text-[11px] font-medium text-slate-300 opacity-100 transition-opacity hover:bg-slate-600 hover:text-white focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+	            title="Copy code"
+	        >
             {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
             {copied ? 'Copied' : failed ? 'Failed' : 'Copy'}
         </button>

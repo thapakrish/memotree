@@ -3,6 +3,7 @@ import {
     ReactFlow,
     Controls,
     Background,
+    ReactFlowProvider,
     useNodesState,
     useEdgesState,
     useReactFlow,
@@ -33,6 +34,14 @@ const nodeTypes = {
 };
 
 export function GraphView() {
+    return (
+        <ReactFlowProvider>
+            <GraphViewInner />
+        </ReactFlowProvider>
+    );
+}
+
+function GraphViewInner() {
     const {
         nodes: storeNodes,
         previewNodes,

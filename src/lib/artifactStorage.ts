@@ -8,12 +8,16 @@ interface SaveImageArtifactResponse {
     sizeBytes: number;
 }
 
+interface DeleteImageArtifactsResponse {
+    deletedCount: number;
+}
+
 export function getImageSource(image: Pick<ImageFileArtifact | ImageArtifact | AttachmentPart, 'mimeType' | 'data' | 'url'>): string {
-    if (image.url) {
-        return image.url;
-    }
     if (image.data) {
         return `data:${image.mimeType};base64,${image.data}`;
+    }
+    if (image.url) {
+        return image.url;
     }
     return '';
 }
@@ -73,4 +77,24 @@ export async function readImageUrlAsBase64(url: string): Promise<string> {
         };
         reader.readAsDataURL(blob);
     });
+}
+
+export async function deleteImageArtifactFiles(artifactIds: string[]): Promise<DeleteImageArtifactsResponse> {
+    const uniqueArtifactIds = [...new Set(artifactIds)].filter(Boolean);
+    if (uniqueArtifactIds.length === 0) {
+        return { deletedCount: 0 };
+    }
+
+    const response = await fetch('/api/artifacts/images/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ artifactIds: uniqueArtifactIds }),
+    });
+
+    if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || 'Failed to delete image artifact files.');
+    }
+
+    return await response.json() as DeleteImageArtifactsResponse;
 }

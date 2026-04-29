@@ -2,11 +2,10 @@ import type { IProvider, ProviderCapabilities, ProviderContextEstimate, Provider
 import type { AttachmentPart, ChatEvent } from '../../store/types';
 import {
     buildGeminiContentsWithCompaction,
+    buildAssistantEventContents,
     buildSystemInstruction,
     compactPathNodes,
     countTokens as geminiCountTokens,
-    createFunctionResponseContent,
-    createModelToolCallContent,
     extractAssistantEvents,
     extractFunctionCalls,
     extractThoughtsTokenCount,
@@ -108,12 +107,11 @@ export function createGeminiProvider(apiKey: string): IProvider {
             yield* normalizeStream(rawStream);
         },
 
-        async *continueWithToolResults(path, compactions, priorEvents, priorFunctionCalls, functionResponses, memoryState, signal, requestConfig) {
+        async *continueWithToolResults(path, compactions, priorEvents, _priorFunctionCalls, _functionResponses, memoryState, signal, requestConfig) {
             const baseContents = buildGeminiContentsWithCompaction(path, compactions);
             const followUpContents = [
                 ...baseContents,
-                createModelToolCallContent(priorEvents, priorFunctionCalls),
-                createFunctionResponseContent(functionResponses),
+                ...buildAssistantEventContents(priorEvents),
             ];
             const rawStream = await generateGeminiResponseStreamFromContents(
                 followUpContents, memoryState, apiKey, signal, requestConfig,

@@ -1,16 +1,18 @@
 import { ChatView } from './components/ChatView';
-import { ImageCanvas } from './components/ImageCanvas';
-import { CommandPalette } from './components/CommandPalette';
 import { useGraphStore } from './store/useGraphStore';
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { featureFlags } from './config/featureFlags';
 import { ImageIcon, MessageSquare } from 'lucide-react';
 
 type MobileTab = 'chat' | 'canvas';
 
+const GraphView = lazy(() => import('./components/GraphView').then((module) => ({ default: module.GraphView })));
+const ImageCanvas = lazy(() => import('./components/ImageCanvas').then((module) => ({ default: module.ImageCanvas })));
+const CommandPalette = lazy(() => import('./components/CommandPalette').then((module) => ({ default: module.CommandPalette })));
+
 function MobileTabBar({ tab, onChange }: { tab: MobileTab; onChange: (t: MobileTab) => void }) {
   return (
-    <div className="flex h-14 shrink-0 border-t border-slate-200 bg-white">
+    <div className="flex h-14 shrink-0 border-t border-slate-200 bg-white md:hidden">
       <button
         onClick={() => onChange('chat')}
         className={`flex flex-1 flex-col items-center justify-center gap-1 text-[11px] font-semibold transition-colors ${
@@ -31,6 +33,36 @@ function MobileTabBar({ tab, onChange }: { tab: MobileTab; onChange: (t: MobileT
       </button>
     </div>
   );
+}
+
+function CanvasSurface() {
+  return (
+    <Suspense fallback={<div className="h-full w-full bg-slate-50" />}>
+      {featureFlags.advancedGraphTools ? <GraphView /> : <ImageCanvas />}
+    </Suspense>
+  );
+}
+
+function shouldIgnoreGlobalShortcut(event: KeyboardEvent) {
+  if (event.metaKey || event.ctrlKey || event.altKey) {
+    return true;
+  }
+
+  const target = event.target as HTMLElement | null;
+  if (!target) {
+    return false;
+  }
+
+  return Boolean(target.closest([
+    '[role="dialog"]',
+    'input',
+    'textarea',
+    'select',
+    'button',
+    'a[href]',
+    '[contenteditable="true"]',
+    '[role="button"]',
+  ].join(',')));
 }
 
 function App() {
@@ -55,9 +87,8 @@ function App() {
     }
 
     const handleGlobalShortcuts = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
-          return;
+      if (shouldIgnoreGlobalShortcut(e)) {
+        return;
       }
 
       switch (e.key) {
@@ -101,31 +132,29 @@ function App() {
   }
 
   return (
-    <>
-      {/* ── Mobile layout (< md) ── */}
-      <div className="flex h-dvh w-screen flex-col overflow-hidden bg-white font-sans md:hidden">
-        <div className={`min-h-0 flex-1 overflow-hidden ${mobileTab === 'chat' ? 'block' : 'hidden'}`}>
+    <div className="flex h-dvh w-screen flex-col overflow-hidden bg-white font-sans md:h-screen md:flex-row md:bg-slate-100">
+        <div
+          className={`min-h-0 flex-1 overflow-hidden md:h-full md:w-[450px] md:flex-none md:shadow-xl ${
+            mobileTab === 'chat' ? 'block' : 'hidden'
+          } md:block`}
+          style={{ zIndex: 10 }}
+        >
           <ChatView />
         </div>
-        <div className={`min-h-0 flex-1 overflow-hidden ${mobileTab === 'canvas' ? 'block' : 'hidden'}`}>
-          <ImageCanvas />
+        <div
+          className={`relative min-h-0 flex-1 overflow-hidden bg-slate-50 ${
+            mobileTab === 'canvas' ? 'block' : 'hidden'
+          } md:block`}
+        >
+          <CanvasSurface />
         </div>
         <MobileTabBar tab={mobileTab} onChange={setMobileTab} />
-      </div>
-
-      {/* ── Desktop layout (≥ md) ── */}
-      <div className="hidden h-screen w-screen overflow-hidden bg-slate-100 font-sans md:flex">
-        {/* Pane A: Chat */}
-        <div className="h-full w-[450px] shrink-0 overflow-hidden shadow-xl" style={{ zIndex: 10 }}>
-          <ChatView />
-        </div>
-        {/* Pane B: Unified image/turn canvas */}
-        <div className="relative h-full flex-1 bg-slate-50">
-          <ImageCanvas />
-        </div>
-        {featureFlags.keyboardPowerTools && <CommandPalette />}
-      </div>
-    </>
+        {featureFlags.keyboardPowerTools && (
+          <Suspense fallback={null}>
+            <CommandPalette />
+          </Suspense>
+        )}
+    </div>
   );
 }
 
