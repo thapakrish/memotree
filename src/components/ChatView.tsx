@@ -387,6 +387,12 @@ interface SessionIntentOption {
     description: string;
 }
 
+interface StylePreset {
+    id: string;
+    label: string;
+    prompt: string;
+}
+
 const SESSION_INTENT_OPTIONS: SessionIntentOption[] = [
     {
         value: 'ask',
@@ -414,6 +420,87 @@ const SESSION_INTENT_OPTIONS: SessionIntentOption[] = [
         description: 'Branch an image or prompt into alternatives.',
     },
 ];
+
+const STYLE_PRESETS: StylePreset[] = [
+    {
+        id: 'editorial-bw',
+        label: 'Editorial B&W',
+        prompt: 'high-contrast black and white editorial photography with controlled highlights, clean shadows, and refined texture',
+    },
+    {
+        id: 'color-planes',
+        label: 'Color Planes',
+        prompt: 'bold graphic color fields, crisp geometric light, saturated accents, and a modern studio composition',
+    },
+    {
+        id: 'soft-portrait',
+        label: 'Soft Portrait',
+        prompt: 'soft natural portrait lighting, gentle contrast, warm skin tones, subtle depth, and an intimate lens feel',
+    },
+    {
+        id: 'cinematic-night',
+        label: 'Cinematic Night',
+        prompt: 'cinematic low-key lighting, deep shadows, practical lights, atmospheric depth, and film still color grading',
+    },
+    {
+        id: 'pencil-study',
+        label: 'Pencil Study',
+        prompt: 'detailed pencil and graphite study on textured paper with visible line work and restrained shading',
+    },
+    {
+        id: 'surreal-desert',
+        label: 'Surreal Desert',
+        prompt: 'surreal desert color, dreamlike scale, clean horizon lines, unexpected forms, and painterly realism',
+    },
+];
+
+function requiresSourceImage(intent: SessionIntent): boolean {
+    return intent === 'image_edit' || intent === 'style_fit' || intent === 'variants';
+}
+
+function getIntentAttachmentUse(intent: SessionIntent): AttachmentPart['use'] {
+    return requiresSourceImage(intent) ? 'edit_target' : 'context';
+}
+
+function applyIntentAttachmentUse(parts: AttachmentPart[], intent: SessionIntent): AttachmentPart[] {
+    const use = getIntentAttachmentUse(intent);
+    return parts.map((part) => part.kind === 'image' ? { ...part, use } : part);
+}
+
+function getStylePreset(styleId: string | null): StylePreset | undefined {
+    return STYLE_PRESETS.find((style) => style.id === styleId);
+}
+
+function buildIntentRequestText(intent: SessionIntent, input: string, style?: StylePreset): string {
+    const userText = input.trim();
+
+    if (intent === 'style_fit' && style) {
+        return [
+            `Apply the ${style.label} style to the source image.`,
+            `Style direction: ${style.prompt}.`,
+            'Preserve the source subject, composition, pose, and important details unless the user asks to change them.',
+            userText ? `Additional instruction: ${userText}` : '',
+        ].filter(Boolean).join('\n');
+    }
+
+    if (intent === 'variants' && !userText) {
+        return 'Create distinct visual variants of the source image. Preserve the core subject and composition while exploring meaningful alternatives.';
+    }
+
+    if (intent === 'image_edit' && !userText) {
+        return 'Edit the source image while preserving the core subject, composition, and important details.';
+    }
+
+    return userText;
+}
+
+function getIntentSummary(intent: SessionIntent, input: string, style?: StylePreset): string {
+    const userText = input.trim();
+    if (userText) return getTextSummary(userText);
+    if (intent === 'style_fit' && style) return `Fit style: ${style.label}`;
+    const option = SESSION_INTENT_OPTIONS.find((candidate) => candidate.value === intent);
+    return option?.label ?? 'Request';
+}
 
 function getSessionIntentIcon(intent: SessionIntent) {
     switch (intent) {
@@ -717,6 +804,7 @@ export function ChatView() {
     const [isCompacting, setIsCompacting] = useState(false);
     const [branchCopied, setBranchCopied] = useState(false);
     const [branchCopyFailed, setBranchCopyFailed] = useState(false);
+    const [selectedStyleId, setSelectedStyleId] = useState<string | null>(STYLE_PRESETS[0]?.id ?? null);
     const [statusMessage, setStatusMessage] = useState<{ tone: 'error' | 'info'; text: string } | null>(null);
     const provider = useMemo<IProvider | null>(
         () => apiKey ? createProvider(providerId, apiKey) : null,
@@ -752,6 +840,9 @@ export function ChatView() {
             if (isImagenModelId(imageModelId)) {
                 setImageModelId(DEFAULT_GEMINI_IMAGE_MODEL_ID);
             }
+        }
+        if (intent === 'style_fit' && !selectedStyleId) {
+            setSelectedStyleId(STYLE_PRESETS[0]?.id ?? null);
         }
         requestAnimationFrame(() => textareaRef.current?.focus());
     };
@@ -806,7 +897,7 @@ export function ChatView() {
         e.preventDefault();
         const parts = await processClipboardItems(e.clipboardData.items);
         if (parts.length > 0) {
-            addAttachments(parts);
+            addAttachments(applyIntentAttachmentUse(parts, sessionIntent));
         } else {
             showStatus('error', 'Unable to attach the pasted image.');
         }
@@ -840,7 +931,7 @@ export function ChatView() {
         const parts = await Promise.all(files.map((f) => processAnyFile(f, 'drop')));
         const validParts = parts.filter(Boolean) as AttachmentPart[];
         if (validParts.length > 0) {
-            addAttachments(validParts);
+            addAttachments(applyIntentAttachmentUse(validParts, sessionIntent));
         }
         if (files.length > validParts.length) {
             showStatus('error', 'Some dropped files could not be attached. Check file type and size limits.');
@@ -853,7 +944,7 @@ export function ChatView() {
         const parts = await Promise.all(files.map((f) => processAnyFile(f, 'file')));
         const validParts = parts.filter(Boolean) as AttachmentPart[];
         if (validParts.length > 0) {
-            addAttachments(validParts);
+            addAttachments(applyIntentAttachmentUse(validParts, sessionIntent));
         }
         if (files.length > validParts.length) {
             showStatus('error', 'Some selected files could not be attached. Check file type and size limits.');
@@ -928,16 +1019,30 @@ export function ChatView() {
         () => createAttachmentsFromArtifacts(canvasSelectedArtifactIds, artifacts, attachedArtifactIds, 'edit_target'),
         [artifacts, attachedArtifactIds, canvasSelectedArtifactIds],
     );
+    const selectedStyle = getStylePreset(selectedStyleId);
+    const draftSourceImageCount = useMemo(
+        () => [...attachments, ...selectedCanvasDraftAttachments]
+            .filter((attachment) => attachment.kind === 'image' && attachment.use === 'edit_target').length,
+        [attachments, selectedCanvasDraftAttachments],
+    );
+    const needsSourceImage = requiresSourceImage(sessionIntent);
 
-    const handleAddSelectedArtifacts = () => {
+    const handleAddSelectedArtifacts = (use: AttachmentPart['use'] = getIntentAttachmentUse(sessionIntent)) => {
         const parts = selectedArtifactIds
             .filter((artifactId) => !attachedArtifactIds.has(artifactId))
             .map((artifactId) => artifacts[artifactId])
             .filter((artifact): artifact is ImageFileArtifact => Boolean(artifact))
-            .map((artifact) => createAttachmentFromFileArtifact(artifact));
+            .map((artifact) => createAttachmentFromFileArtifact(artifact, use));
 
         if (parts.length > 0) {
             addAttachments(parts);
+            if (use === 'edit_target') {
+                if (sessionIntent === 'ask' || sessionIntent === 'image_generate') {
+                    handleSelectSessionIntent('image_edit');
+                } else {
+                    setResponseMode('image');
+                }
+            }
             showStatus('info', `${formatImageCountLabel(parts.length, 'input')} added to the next request.`);
         }
 
@@ -984,13 +1089,14 @@ export function ChatView() {
                 artifactSum + estimateImageTokens(artifact.data), 0);
             return sum + roughTokens(node.content) + Math.ceil(eventTextLength / 4) + priorArtifactTokens;
         }, 0);
-        const draftTokens = input.trim() ? roughTokens(input.trim()) : 0;
+        const requestText = buildIntentRequestText(sessionIntent, input, selectedStyle);
+        const draftTokens = requestText.trim() ? roughTokens(requestText.trim()) : 0;
 
         return providerEstimate.cacheableTokens
             + providerEstimate.attachmentTokens
             + conversationTokens
             + draftTokens;
-    }, [attachments, draftMemoryState, imageModelId, imageOutputCount, input, path, provider, responseMode, selectedCanvasDraftAttachments]);
+    }, [attachments, draftMemoryState, imageModelId, imageOutputCount, input, path, provider, responseMode, selectedCanvasDraftAttachments, selectedStyle, sessionIntent]);
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -1221,11 +1327,21 @@ export function ChatView() {
 
     const handleSend = async () => {
         const draftAttachments = [...attachments, ...selectedCanvasDraftAttachments];
-        if ((!input.trim() && draftAttachments.length === 0) || !provider) return;
+        if (!provider) return;
+        if (requiresSourceImage(sessionIntent) && !hasEditTargetImage(draftAttachments)) {
+            showStatus('error', 'Choose a source image first.');
+            return;
+        }
+        if (sessionIntent === 'style_fit' && !selectedStyle) {
+            showStatus('error', 'Pick a style first.');
+            return;
+        }
+
+        const nextInput = buildIntentRequestText(sessionIntent, input, selectedStyle);
+        if ((!nextInput.trim() && draftAttachments.length === 0)) return;
 
         const activeNode = path.length > 0 ? path[path.length - 1] : null;
         const parentId = activeNode?.role === 'user' ? activeNode.parentId : activeNodeId;
-        const nextInput = input;
         let nextAttachments: AttachmentPart[];
         const requestedResponseMode = getEffectiveResponseMode(responseMode, draftAttachments, imageModelId);
 
@@ -1250,7 +1366,7 @@ export function ChatView() {
             responseMode: requestedResponseMode,
             attachments: nextAttachments.length > 0 ? nextAttachments : undefined,
             memoryPatches: [],
-            summary: nextInput.trim() ? getTextSummary(nextInput) : `Image request (${requestedResponseMode})`,
+            summary: getIntentSummary(sessionIntent, input, selectedStyle) || `Image request (${requestedResponseMode})`,
         });
 
         setInput('');
@@ -1780,6 +1896,65 @@ export function ChatView() {
                                 </button>
                             </div>
                         )}
+                        {needsSourceImage && (
+                            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                                <div className="flex min-w-0 flex-1 items-center gap-2 text-xs font-medium text-amber-900">
+                                    <ImageIcon className="h-3.5 w-3.5 shrink-0" />
+                                    <span className="truncate">
+                                        Source image
+                                        <span className={draftSourceImageCount > 0 ? 'ml-2 text-emerald-700' : 'ml-2 text-amber-700'}>
+                                            {draftSourceImageCount > 0 ? `${draftSourceImageCount} selected` : 'required'}
+                                        </span>
+                                    </span>
+                                </div>
+                                <button
+                                    onClick={() => fileInputRef.current?.click()}
+                                    disabled={isTyping || !provider?.capabilities.supportsFileAttachments}
+                                    className="rounded-md border border-amber-200 bg-white px-2 py-1 text-xs font-semibold text-amber-800 transition-colors hover:border-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Upload
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setSelectedArtifactIds([]);
+                                        setIsArtifactPickerOpen(true);
+                                    }}
+                                    disabled={isTyping || branchImageArtifacts.length === 0}
+                                    className="rounded-md border border-amber-200 bg-white px-2 py-1 text-xs font-semibold text-amber-800 transition-colors hover:border-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Previous
+                                </button>
+                            </div>
+                        )}
+                        {sessionIntent === 'style_fit' && (
+                            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-700">
+                                    <Sparkles className="h-3.5 w-3.5 text-blue-500" />
+                                    Style
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {STYLE_PRESETS.map((style) => {
+                                        const isSelected = selectedStyleId === style.id;
+                                        return (
+                                            <button
+                                                key={style.id}
+                                                type="button"
+                                                onClick={() => setSelectedStyleId(style.id)}
+                                                disabled={isTyping}
+                                                className={`rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                                                    isSelected
+                                                        ? 'border-blue-300 bg-blue-50 text-blue-700'
+                                                        : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-blue-300 hover:text-blue-700'
+                                                } disabled:cursor-not-allowed disabled:opacity-50`}
+                                                title={style.prompt}
+                                            >
+                                                {style.label}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
                         {/* Attachment preview chips */}
                         {attachments.length > 0 && (
                             <div className="flex flex-wrap gap-2">
@@ -2025,7 +2200,9 @@ export function ChatView() {
                     >
                         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
                             <div>
-                                <h2 className="text-sm font-semibold text-slate-800">Branch Images</h2>
+                                <h2 className="text-sm font-semibold text-slate-800">
+                                    {needsSourceImage ? 'Choose Source Image' : 'Branch Images'}
+                                </h2>
                                 <p className="text-xs text-slate-400">{branchImageArtifacts.length} available</p>
                             </div>
                             <button
@@ -2082,12 +2259,21 @@ export function ChatView() {
                                 >
                                     Cancel
                                 </button>
+                                {needsSourceImage && (
+                                    <button
+                                        onClick={() => handleAddSelectedArtifacts('context')}
+                                        disabled={selectedArtifactIds.length === 0}
+                                        className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        Add Reference
+                                    </button>
+                                )}
                                 <button
-                                    onClick={handleAddSelectedArtifacts}
+                                    onClick={() => handleAddSelectedArtifacts(getIntentAttachmentUse(sessionIntent))}
                                     disabled={selectedArtifactIds.length === 0}
                                     className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
-                                    Add
+                                    {needsSourceImage ? 'Use as Source' : 'Add'}
                                 </button>
                             </div>
                         </div>
