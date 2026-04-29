@@ -806,6 +806,7 @@ export function ChatView() {
     const [branchCopyFailed, setBranchCopyFailed] = useState(false);
     const [selectedStyleId, setSelectedStyleId] = useState<string | null>(STYLE_PRESETS[0]?.id ?? null);
     const [statusMessage, setStatusMessage] = useState<{ tone: 'error' | 'info'; text: string } | null>(null);
+    const [artifactSaveStatus, setArtifactSaveStatus] = useState<{ tone: 'error' | 'info' | 'success'; text: string } | null>(null);
     const provider = useMemo<IProvider | null>(
         () => apiKey ? createProvider(providerId, apiKey) : null,
         [apiKey, providerId],
@@ -993,13 +994,28 @@ export function ChatView() {
             return;
         }
 
+        setArtifactSaveStatus({
+            tone: 'info',
+            text: `Saving ${imagesToSave.length} image file${imagesToSave.length === 1 ? '' : 's'}...`,
+        });
+
         try {
             const updates = (await Promise.all(imagesToSave.map((artifact) =>
                 saveImageArtifactFile(state.sessionId, artifact),
             ))).filter((update): update is NonNullable<typeof update> => Boolean(update));
             markImageArtifactsStored(updates);
+            if (updates.length > 0) {
+                setArtifactSaveStatus({
+                    tone: 'success',
+                    text: `Saved ${updates.length} image file${updates.length === 1 ? '' : 's'} to disk`,
+                });
+            }
         } catch (error) {
             console.error('Image artifact filesystem save failed:', error);
+            setArtifactSaveStatus({
+                tone: 'error',
+                text: 'Image file save failed; kept inline data for this session',
+            });
             showStatus('error', 'Image file save failed. Keeping inline image data for this session.');
         }
     };
@@ -1437,6 +1453,11 @@ export function ChatView() {
             : lastSavedAt
                 ? `Saved ${new Date(lastSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
                 : null;
+    const artifactSaveStatusClass = artifactSaveStatus?.tone === 'error'
+        ? 'text-red-500'
+        : artifactSaveStatus?.tone === 'success'
+            ? 'text-emerald-600'
+            : 'text-slate-400';
 
     return (
         <div className="w-full h-full flex flex-col bg-white border-r border-slate-200 shadow-sm z-20">
@@ -2183,6 +2204,11 @@ export function ChatView() {
                     {saveStatusLabel && (
                         <span className={`max-w-full truncate text-[11px] font-medium ${saveError ? 'text-red-500' : 'text-slate-400'}`}>
                             {saveStatusLabel}
+                        </span>
+                    )}
+                    {artifactSaveStatus && (
+                        <span className={`max-w-full truncate text-[11px] font-medium ${artifactSaveStatusClass}`}>
+                            {artifactSaveStatus.text}
                         </span>
                     )}
                 </div>
