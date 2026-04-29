@@ -23,6 +23,7 @@ function resetGraphStore() {
         saveError: null,
         selectedNodeIds: [],
         canvasSelectedArtifactIds: [],
+        canvasSelectedArtifactUse: 'edit_target',
     });
 }
 
@@ -125,6 +126,76 @@ describe('useGraphStore image artifacts', () => {
             artifactId: 'generated-event-1',
             artifactPath: '/artifacts/images/generated-event-1/generated-image.png',
             url: '/api/artifacts/images/generated-event-1/generated-image.png',
+        });
+    });
+
+    it('keeps canvas image selection role for source and reference workflows', () => {
+        useGraphStore.getState().setCanvasArtifactSelection(['image-1'], 'context');
+
+        expect(useGraphStore.getState().canvasSelectedArtifactIds).toEqual(['image-1']);
+        expect(useGraphStore.getState().canvasSelectedArtifactUse).toBe('context');
+
+        useGraphStore.getState().clearCanvasArtifactSelection();
+
+        expect(useGraphStore.getState().canvasSelectedArtifactIds).toEqual([]);
+        expect(useGraphStore.getState().canvasSelectedArtifactUse).toBe('edit_target');
+    });
+
+    it('stores image workflow lineage on generated artifacts', () => {
+        const userNodeId = useGraphStore.getState().addNode({
+            parentId: null,
+            role: 'user',
+            sessionIntent: 'style_fit',
+            responseMode: 'image',
+            content: 'Apply the style.',
+            attachments: [{
+                id: 'source-attachment',
+                kind: 'image',
+                mimeType: 'image/png',
+                data: 'source-image-data',
+                artifactId: 'source-image',
+                sourceType: 'file',
+                use: 'edit_target',
+            }],
+            imageWorkflow: {
+                intent: 'style_fit',
+                prompt: 'Apply the style.',
+                sourceArtifactIds: ['source-image'],
+                stylePresetId: 'editorial-bw',
+                styleLabel: 'Editorial B&W',
+            },
+            memoryPatches: [],
+        });
+
+        useGraphStore.getState().addNode({
+            parentId: userNodeId,
+            role: 'assistant',
+            sessionIntent: 'style_fit',
+            responseMode: 'image',
+            content: 'Generated styled image',
+            events: [{
+                kind: 'image_artifact',
+                artifact: {
+                    id: 'styled-output',
+                    mimeType: 'image/png',
+                    data: 'styled-output-data',
+                    label: 'Styled output',
+                },
+            }],
+            memoryPatches: [],
+        });
+
+        expect(useGraphStore.getState().artifacts['styled-output']).toMatchObject({
+            id: 'styled-output',
+            origin: 'generated',
+            parentArtifactIds: ['source-image'],
+            workflow: {
+                intent: 'style_fit',
+                prompt: 'Apply the style.',
+                sourceArtifactIds: ['source-image'],
+                stylePresetId: 'editorial-bw',
+                styleLabel: 'Editorial B&W',
+            },
         });
     });
 });
