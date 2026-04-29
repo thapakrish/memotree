@@ -12,6 +12,7 @@ export type AttachmentMimeType =
 
 export type AttachmentKind = 'image' | 'pdf' | 'audio';
 export type AssistantResponseMode = 'text' | 'image' | 'multimodal';
+export type SessionIntent = 'ask' | 'image_generate' | 'image_edit' | 'style_fit' | 'variants';
 export type ImageArtifactMimeType = Extract<AttachmentMimeType, 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'>;
 export type ImageFileOrigin = 'upload' | 'generated';
 export type ImageFileUse = 'context' | 'edit_target';
@@ -245,6 +246,7 @@ export interface ConversationGraph {
     rootId: string | null;
     activeNodeId: string | null;
     sessionTitle?: string;
+    sessionIntent?: SessionIntent;
     providerId: ProviderId;
     imageModelId?: string;
     imageOutputCount?: number;

@@ -1,7 +1,7 @@
 import { lazy, startTransition, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, FileText, Music, ScanText, ArrowRight, Sparkles, RotateCcw, Pencil, Images } from 'lucide-react';
 import { useGraphStore } from '../store/useGraphStore';
-import type { AssistantResponseMode, AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, ImageArtifact, ImageFileArtifact, MessageNode } from '../store/types';
+import type { AssistantResponseMode, AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, ImageArtifact, ImageFileArtifact, MessageNode, SessionIntent } from '../store/types';
 import type { IProvider, ProviderFunctionCall, StreamDelta } from '../lib/providers';
 import { createProvider } from '../lib/providers';
 import { appendEvent, getFinalAnswerText, getImageArtifacts, getNodeSummary, mergeEvents } from '../lib/chatEvents';
@@ -11,7 +11,7 @@ import { featureFlags, isImageOnlyAttachmentMode } from '../config/featureFlags'
 import { buildImageArtifactFileName, buildImageArtifactPath } from '../lib/artifactFiles';
 import { getImageSource, readImageUrlAsBase64, saveImageArtifactFile } from '../lib/artifactStorage';
 import { stripGeneratedImagePlaceholders } from '../lib/generatedImagePlaceholders';
-import { DEFAULT_IMAGEN_OUTPUT_COUNT, getImageModelDisplayName, getImageModelOptions, isImagenModelId } from '../lib/geminiModels';
+import { DEFAULT_GEMINI_IMAGE_MODEL_ID, DEFAULT_IMAGEN_OUTPUT_COUNT, getImageModelDisplayName, getImageModelOptions, IMAGEN_MODEL_OPTIONS, isImagenModelId } from '../lib/geminiModels';
 import { hydrateAttachmentImageData, hydrateMessagePathImageData } from '../lib/hydrateImageData';
 import logoMark from '../assets/logo-mark.svg';
 
@@ -377,6 +377,98 @@ const RESPONSE_MODE_OPTIONS: Array<{ value: AssistantResponseMode; label: string
     { value: 'image', label: 'Image' },
     { value: 'multimodal', label: 'Mixed' },
 ];
+const DEFAULT_IMAGEN_MODEL_ID = IMAGEN_MODEL_OPTIONS.find((option) => option.id === 'imagen-4.0-generate-001')?.id
+    ?? IMAGEN_MODEL_OPTIONS[0]?.id
+    ?? DEFAULT_GEMINI_IMAGE_MODEL_ID;
+
+interface SessionIntentOption {
+    value: SessionIntent;
+    label: string;
+    description: string;
+}
+
+const SESSION_INTENT_OPTIONS: SessionIntentOption[] = [
+    {
+        value: 'ask',
+        label: 'Ask',
+        description: 'Work through text, code, plans, and reasoning.',
+    },
+    {
+        value: 'image_generate',
+        label: 'Generate Image',
+        description: 'Start from a prompt and create visual options.',
+    },
+    {
+        value: 'image_edit',
+        label: 'Edit Image',
+        description: 'Use an uploaded or generated image as the source.',
+    },
+    {
+        value: 'style_fit',
+        label: 'Fit Style',
+        description: 'Apply a visual direction to a chosen source image.',
+    },
+    {
+        value: 'variants',
+        label: 'Explore Variants',
+        description: 'Branch an image or prompt into alternatives.',
+    },
+];
+
+function getSessionIntentIcon(intent: SessionIntent) {
+    switch (intent) {
+        case 'ask':
+            return <ScanText className="h-4 w-4" />;
+        case 'image_generate':
+            return <ImageIcon className="h-4 w-4" />;
+        case 'image_edit':
+            return <Pencil className="h-4 w-4" />;
+        case 'style_fit':
+            return <Sparkles className="h-4 w-4" />;
+        case 'variants':
+            return <Images className="h-4 w-4" />;
+    }
+}
+
+function getRequestPlaceholder({
+    activeNodeId,
+    isDraggingOver,
+    isImageOnlyMode,
+    isAfterUserNode,
+    responseMode,
+    sessionIntent,
+    supportsFileAttachments,
+}: {
+    activeNodeId: string | null;
+    isDraggingOver: boolean;
+    isImageOnlyMode: boolean;
+    isAfterUserNode: boolean;
+    responseMode: AssistantResponseMode;
+    sessionIntent: SessionIntent;
+    supportsFileAttachments?: boolean;
+}): string {
+    if (isDraggingOver) return 'Drop image here...';
+    if (isAfterUserNode) return 'Try an alternative prompt...';
+
+    switch (sessionIntent) {
+        case 'image_generate':
+            return 'Describe the image to generate...';
+        case 'image_edit':
+            return 'Attach or choose a source image, then describe the edit...';
+        case 'style_fit':
+            return 'Choose a source image, then describe the target style...';
+        case 'variants':
+            return 'Select an image or describe the variants to explore...';
+        case 'ask':
+            break;
+    }
+
+    if (!activeNodeId) return 'Start a new session...';
+    if (responseMode === 'image') return 'Describe the image to generate or edit...';
+    if (responseMode === 'multimodal') return 'Ask for text plus generated images...';
+    if (supportsFileAttachments) return isImageOnlyMode ? 'Reply or attach an image...' : 'Reply, paste an image, or attach a file...';
+    return 'Reply to this message...';
+}
 
 async function collectProviderStream(
     stream: AsyncGenerator<StreamDelta>,
@@ -587,6 +679,8 @@ export function ChatView() {
         providerId,
         apiKey,
         setApiKey,
+        sessionIntent = 'ask',
+        setSessionIntent,
         imageModelId,
         setImageModelId,
         imageOutputCount = DEFAULT_IMAGEN_OUTPUT_COUNT,
@@ -644,6 +738,24 @@ export function ChatView() {
         setStatusMessage({ tone, text });
     };
 
+    const handleSelectSessionIntent = (intent: SessionIntent) => {
+        setSessionIntent(intent);
+        if (intent === 'ask') {
+            setResponseMode('text');
+        } else if (intent === 'image_generate') {
+            setResponseMode('image');
+            if (!isImagenModelId(imageModelId)) {
+                setImageModelId(DEFAULT_IMAGEN_MODEL_ID);
+            }
+        } else {
+            setResponseMode('image');
+            if (isImagenModelId(imageModelId)) {
+                setImageModelId(DEFAULT_GEMINI_IMAGE_MODEL_ID);
+            }
+        }
+        requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+
     const removeAttachment = (id: string) => {
         setAttachments((prev) => prev.filter((a) => a.id !== id));
     };
@@ -666,7 +778,7 @@ export function ChatView() {
 
     const handleEditArtifact = (artifact: ImageArtifact) => {
         addAttachments([createAttachmentFromArtifact(artifact, 'edit_target')]);
-        setResponseMode('multimodal');
+        handleSelectSessionIntent('image_edit');
         showStatus('info', 'Generated image added as the edit target.');
         requestAnimationFrame(() => textareaRef.current?.focus());
     };
@@ -842,7 +954,7 @@ export function ChatView() {
 
         addAttachments(parts);
         if (use === 'edit_target') {
-            setResponseMode('multimodal');
+            handleSelectSessionIntent('image_edit');
         }
         clearCanvasArtifactSelection();
         showStatus('info', `${formatImageCountLabel(parts.length, 'input')} added from the canvas.`);
@@ -853,7 +965,7 @@ export function ChatView() {
     const visibleImportEnvelope = previewImportEnvelope ?? importEnvelope;
     const acceptedSuggestionCount = visibleImportEnvelope?.suggestions?.filter((suggestion) => suggestion.status === 'accepted').length ?? 0;
     const pendingSuggestionCount = visibleImportEnvelope?.suggestions?.filter((suggestion) => suggestion.status !== 'accepted' && suggestion.status !== 'rejected').length ?? 0;
-    const composerEstimate = useMemo(() => {
+    const requestEstimate = useMemo(() => {
         const draftAttachments = [...attachments, ...selectedCanvasDraftAttachments];
         if (!provider || (!input.trim() && draftAttachments.length === 0)) {
             return null;
@@ -1347,47 +1459,61 @@ export function ChatView() {
                     </div>
                 )}
                 {path.length === 0 ? (
-                    <div className="flex min-h-full items-center justify-center py-10">
-                        <div className="max-w-xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-                            <div className="flex items-center gap-3">
-                                <div className="rounded-2xl bg-blue-50 p-3 text-blue-600">
-                                    <Sparkles className="h-6 w-6" />
-                                </div>
+                    <div className="flex min-h-full items-center justify-center px-2 py-8">
+                        <div className="w-full max-w-3xl rounded-lg border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                                 <div>
-                                    <h2 className="text-lg font-semibold text-slate-800">Welcome to MemoTree</h2>
-                                    <p className="text-sm text-slate-500">Conversations branch into a navigable tree instead of disappearing into one linear thread.</p>
+                                    <h2 className="text-lg font-semibold text-slate-800">Start a Session</h2>
+                                    <p className="mt-1 text-sm leading-relaxed text-slate-500">
+                                        Pick the path first, then send the first request.
+                                    </p>
                                 </div>
-                            </div>
-
-                            <div className="mt-6 grid gap-3 text-sm text-slate-600 md:grid-cols-3">
-                                <div className="rounded-2xl bg-slate-50 p-4">
-                                    <div className="font-semibold text-slate-800">1. Start a trunk</div>
-                                    <p className="mt-1 leading-relaxed">Send your first message or import an existing chat to create the initial path.</p>
-                                </div>
-                                <div className="rounded-2xl bg-slate-50 p-4">
-                                    <div className="font-semibold text-slate-800">2. Fork anywhere</div>
-                                    <p className="mt-1 leading-relaxed">Jump back to any node and branch from there when you want to explore alternatives.</p>
-                                </div>
-                                <div className="rounded-2xl bg-slate-50 p-4">
-                                    <div className="font-semibold text-slate-800">3. Inspect context</div>
-                                    <p className="mt-1 leading-relaxed">Open <span className="font-medium text-slate-700">Context</span> to see what the next model call will include.</p>
-                                </div>
-                            </div>
-
-                            <div className="mt-6 flex flex-wrap items-center gap-3">
-                                <button
-                                    onClick={() => textareaRef.current?.focus()}
-                                    className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
-                                >
-                                    <ArrowRight className="h-4 w-4" />
-                                    Start typing
-                                </button>
                                 <button
                                     onClick={() => setIsSessionsOpen(true)}
-                                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
                                 >
                                     <FolderOpen className="h-4 w-4" />
                                     Open Sessions
+                                </button>
+                            </div>
+
+                            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                                {SESSION_INTENT_OPTIONS.map((option) => {
+                                    const isSelected = option.value === sessionIntent;
+                                    return (
+                                        <button
+                                            key={option.value}
+                                            type="button"
+                                            onClick={() => handleSelectSessionIntent(option.value)}
+                                            className={`group flex min-h-24 items-start gap-3 rounded-lg border p-4 text-left transition-colors ${
+                                                isSelected
+                                                    ? 'border-blue-400 bg-blue-50 text-blue-900 ring-2 ring-blue-100'
+                                                    : 'border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50'
+                                            }`}
+                                        >
+                                            <span className={`mt-0.5 rounded-md border p-2 ${
+                                                isSelected
+                                                    ? 'border-blue-200 bg-white text-blue-600'
+                                                    : 'border-slate-200 bg-slate-50 text-slate-500 group-hover:border-blue-200 group-hover:bg-white group-hover:text-blue-600'
+                                            }`}>
+                                                {getSessionIntentIcon(option.value)}
+                                            </span>
+                                            <span className="min-w-0">
+                                                <span className="block text-sm font-semibold">{option.label}</span>
+                                                <span className="mt-1 block text-xs leading-relaxed text-slate-500">{option.description}</span>
+                                            </span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            <div className="mt-5 flex flex-wrap items-center gap-3">
+                                <button
+                                    onClick={() => textareaRef.current?.focus()}
+                                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
+                                >
+                                    <ArrowRight className="h-4 w-4" />
+                                    Continue
                                 </button>
                             </div>
                         </div>
@@ -1592,6 +1718,28 @@ export function ChatView() {
                                 </button>
                             </div>
                         )}
+                        <div className="flex flex-wrap items-center gap-2">
+                            {SESSION_INTENT_OPTIONS.map((option) => {
+                                const isSelected = option.value === sessionIntent;
+                                return (
+                                    <button
+                                        key={option.value}
+                                        type="button"
+                                        onClick={() => handleSelectSessionIntent(option.value)}
+                                        disabled={isTyping}
+                                        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                                            isSelected
+                                                ? 'border-blue-300 bg-blue-50 text-blue-700'
+                                                : 'border-slate-200 bg-white text-slate-500 hover:border-blue-300 hover:text-blue-700'
+                                        } disabled:cursor-not-allowed disabled:opacity-50`}
+                                        title={option.description}
+                                    >
+                                        {getSessionIntentIcon(option.value)}
+                                        <span>{option.label}</span>
+                                    </button>
+                                );
+                            })}
+                        </div>
                         {statusMessage && (
                             <div
                                 className={`rounded-xl border px-3 py-2 text-xs font-medium ${
@@ -1812,19 +1960,15 @@ export function ChatView() {
                                 }}
                                 onPaste={handlePaste}
                                 disabled={isTyping}
-                                placeholder={
-                                    isDraggingOver ? 'Drop image here...' :
-                                    !activeNodeId ? 'Start a new conversation...' :
-                                    path[path.length - 1]?.role === 'user' ? 'Try an alternative prompt...' :
-                                    responseMode === 'image'
-                                        ? 'Describe the image to generate or edit...'
-                                        : responseMode === 'multimodal'
-                                            ? 'Ask for text plus generated images...'
-                                            :
-                                    provider?.capabilities.supportsFileAttachments
-                                        ? (isImageOnlyAttachmentMode() ? 'Reply or attach an image...' : 'Reply, paste an image, or attach a file...')
-                                        : 'Reply to this message...'
-                                }
+                                placeholder={getRequestPlaceholder({
+                                    activeNodeId,
+                                    isDraggingOver,
+                                    isImageOnlyMode: isImageOnlyAttachmentMode(),
+                                    isAfterUserNode: path[path.length - 1]?.role === 'user',
+                                    responseMode,
+                                    sessionIntent,
+                                    supportsFileAttachments: provider?.capabilities.supportsFileAttachments,
+                                })}
                                 className="flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 pl-4 py-3.5 pr-4 text-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all shadow-inner disabled:opacity-50 overflow-y-auto"
                                 rows={1}
                                 style={{ maxHeight: '160px' }}
@@ -1839,16 +1983,16 @@ export function ChatView() {
                                 </button>
                             ) : (
                                 <div className="flex flex-col items-end gap-1">
-                                    {composerEstimate !== null && (
+                                    {requestEstimate !== null && (
                                         <span className="text-[11px] font-medium text-slate-400">
-                                            ~{composerEstimate.toLocaleString()} tokens
+                                            ~{requestEstimate.toLocaleString()} tokens
                                         </span>
                                     )}
                                     <button
                                         onClick={handleSend}
                                         disabled={!input.trim() && attachments.length === 0 && selectedCanvasDraftAttachments.length === 0}
                                         className="shrink-0 p-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors shadow-sm"
-                                        title={composerEstimate !== null ? `Estimated next request size: ~${composerEstimate.toLocaleString()} tokens` : 'Send message'}
+                                        title={requestEstimate !== null ? `Estimated next request size: ~${requestEstimate.toLocaleString()} tokens` : 'Send message'}
                                     >
                                         <Send className="w-4 h-4" />
                                     </button>

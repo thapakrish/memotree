@@ -2,6 +2,8 @@ import { openDB } from 'idb';
 import type { AttachmentPart, ChatEvent, ConversationGraph, ImageArtifact, ImageFileArtifact, MessageNode } from '../store/types';
 import { deleteImageArtifactFiles, readImageUrlAsBase64 } from './artifactStorage';
 
+const VALID_SESSION_INTENTS = new Set(['ask', 'image_generate', 'image_edit', 'style_fit', 'variants']);
+
 const DB_NAME = 'memotree';
 const DB_VERSION = 1;
 const SESSIONS_STORE = 'sessions';
@@ -254,6 +256,10 @@ export function validatePersistedSession(data: unknown): PersistedSession {
 
     if ('sessionTitle' in graph && graph.sessionTitle !== undefined && typeof graph.sessionTitle !== 'string') {
         throw new Error('Session title must be a string when provided.');
+    }
+
+    if ('sessionIntent' in graph && graph.sessionIntent !== undefined && !VALID_SESSION_INTENTS.has(String(graph.sessionIntent))) {
+        throw new Error('Session intent is invalid.');
     }
 
     if ('providerId' in graph && graph.providerId !== 'gemini') {

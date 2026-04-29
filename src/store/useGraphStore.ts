@@ -13,6 +13,7 @@ import type {
     MessageNode,
     ConversationGraph,
     MemoryPatch,
+    SessionIntent,
     StructureSuggestion,
 } from './types';
 import { buildImageArtifactFileName, buildImageArtifactPath, buildImageArtifactUrl } from '../lib/artifactFiles';
@@ -72,6 +73,7 @@ interface GraphState extends ConversationGraph {
     getPath: (nodeId: string | null) => MessageNode[];
     setApiKey: (key: string) => void;
     setSessionTitle: (title: string) => void;
+    setSessionIntent: (intent: SessionIntent) => void;
     setProviderId: (providerId: ProviderId) => void;
     setImageModelId: (imageModelId: string) => void;
     setImageOutputCount: (imageOutputCount: number) => void;
@@ -94,6 +96,7 @@ function createEmptySessionState() {
         rootId: null,
         activeNodeId: null,
         sessionTitle: undefined,
+        sessionIntent: 'ask' as SessionIntent,
         providerId: 'gemini' as ProviderId,
         imageModelId: DEFAULT_IMAGE_MODEL_ID,
         imageOutputCount: DEFAULT_IMAGEN_OUTPUT_COUNT,
@@ -412,6 +415,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 canvasPrunedNodeIds: savedSession.graph.canvasPrunedNodeIds ?? [],
                 compactions: savedSession.graph.compactions ?? {},
                 sessionTitle: savedSession.graph.sessionTitle ?? savedSession.title,
+                sessionIntent: savedSession.graph.sessionIntent ?? 'ask',
                 providerId: savedSession.graph.providerId ?? 'gemini',
                 imageModelId: savedSession.graph.imageModelId ?? DEFAULT_IMAGE_MODEL_ID,
                 imageOutputCount: savedSession.graph.imageOutputCount ?? DEFAULT_IMAGEN_OUTPUT_COUNT,
@@ -477,9 +481,10 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             groups: savedSession.graph.groups ?? {},
             uiPositions: savedSession.graph.uiPositions ?? {},
             canvasPrunedNodeIds: savedSession.graph.canvasPrunedNodeIds ?? [],
-            compactions: savedSession.graph.compactions ?? {},
-            sessionTitle: savedSession.graph.sessionTitle ?? savedSession.title,
-            providerId: savedSession.graph.providerId ?? 'gemini',
+                compactions: savedSession.graph.compactions ?? {},
+                sessionTitle: savedSession.graph.sessionTitle ?? savedSession.title,
+                sessionIntent: savedSession.graph.sessionIntent ?? 'ask',
+                providerId: savedSession.graph.providerId ?? 'gemini',
             imageModelId: savedSession.graph.imageModelId ?? DEFAULT_IMAGE_MODEL_ID,
             imageOutputCount: savedSession.graph.imageOutputCount ?? DEFAULT_IMAGEN_OUTPUT_COUNT,
             sessionId: savedSession.id,
@@ -506,9 +511,10 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             groups: validatedSession.graph.groups ?? {},
             uiPositions: validatedSession.graph.uiPositions ?? {},
             canvasPrunedNodeIds: validatedSession.graph.canvasPrunedNodeIds ?? [],
-            compactions: validatedSession.graph.compactions ?? {},
-            sessionTitle: validatedSession.graph.sessionTitle ?? validatedSession.title,
-            providerId: validatedSession.graph.providerId ?? 'gemini',
+                compactions: validatedSession.graph.compactions ?? {},
+                sessionTitle: validatedSession.graph.sessionTitle ?? validatedSession.title,
+                sessionIntent: validatedSession.graph.sessionIntent ?? 'ask',
+                providerId: validatedSession.graph.providerId ?? 'gemini',
             imageModelId: validatedSession.graph.imageModelId ?? DEFAULT_IMAGE_MODEL_ID,
             imageOutputCount: validatedSession.graph.imageOutputCount ?? DEFAULT_IMAGEN_OUTPUT_COUNT,
             sessionId: validatedSession.id,
@@ -580,6 +586,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             canvasPrunedNodeIds: [],
             compactions: {},
             providerId: get().providerId,
+            sessionIntent: 'ask',
             imageModelId: get().imageModelId,
             imageOutputCount: get().imageOutputCount,
             rootId,
@@ -906,6 +913,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     setActiveNode: (id) => set({ activeNodeId: id }),
     setApiKey: (key) => set({ apiKey: key }),
     setSessionTitle: (sessionTitle) => set({ sessionTitle }),
+    setSessionIntent: (sessionIntent) => set({ sessionIntent }),
     setProviderId: (providerId) => set({ providerId }),
     setImageModelId: (imageModelId) => set({ imageModelId }),
     setImageOutputCount: (imageOutputCount) => set({ imageOutputCount }),
@@ -1031,6 +1039,7 @@ useGraphStore.subscribe((state) => {
         canvasPrunedNodeIds: state.canvasPrunedNodeIds,
         compactions: state.compactions,
         sessionTitle: state.sessionTitle,
+        sessionIntent: state.sessionIntent,
         providerId: state.providerId,
         imageModelId: state.imageModelId,
         imageOutputCount: state.imageOutputCount,
@@ -1064,6 +1073,7 @@ useGraphStore.subscribe((state) => {
             canvasPrunedNodeIds: state.canvasPrunedNodeIds,
             compactions: state.compactions,
             sessionTitle: state.sessionTitle,
+            sessionIntent: state.sessionIntent,
             providerId: state.providerId,
             imageModelId: state.imageModelId,
             imageOutputCount: state.imageOutputCount,
@@ -1079,6 +1089,7 @@ useGraphStore.subscribe((state) => {
             canvasPrunedNodeIds: state.canvasPrunedNodeIds,
             compactions: state.compactions,
             sessionTitle: state.sessionTitle,
+            sessionIntent: state.sessionIntent,
             providerId: state.providerId,
             imageModelId: state.imageModelId,
             imageOutputCount: state.imageOutputCount,
