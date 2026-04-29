@@ -886,6 +886,10 @@ function WorkspaceImageCard({
                     <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-slate-400">
                         <span>{artifact.origin}</span>
                         {modelLabel && <span>{modelLabel}</span>}
+                        {artifact.workflow?.styleLabel && <span>{artifact.workflow.styleLabel}</span>}
+                        {(artifact.parentArtifactIds?.length ?? 0) > 0 && (
+                            <span>{artifact.parentArtifactIds!.length} source{artifact.parentArtifactIds!.length === 1 ? '' : 's'}</span>
+                        )}
                         {artifact.sizeBytes && <span>{formatBytes(artifact.sizeBytes)}</span>}
                     </div>
                 </div>

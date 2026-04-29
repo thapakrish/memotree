@@ -7,6 +7,7 @@ import type {
     ContextGroup,
     ImageFileArtifact,
     ImageFileUse,
+    ImageWorkflowMetadata,
     ImageArtifactStorageUpdate,
     ImportedTurn,
     ImportSourcePlatform,
@@ -265,13 +266,15 @@ function createImageArtifactRecordFromAttachment(
 
 function createImageArtifactRecordFromEvent(
     event: Extract<ChatEvent, { kind: 'image_artifact' }>,
-    nodeId: string,
-    timestamp: string,
+    node: MessageNode,
+    parentNode: MessageNode | undefined,
 ): { event: ChatEvent; artifact: ImageFileArtifact } {
     const artifactId = event.artifact.artifactId ?? event.artifact.id;
     const name = buildImageArtifactFileName(artifactId, event.artifact.mimeType, event.artifact.label);
     const path = event.artifact.artifactPath ?? buildImageArtifactPath(artifactId, name);
     const url = event.artifact.url ?? buildImageArtifactUrl(artifactId, name);
+    const parentArtifactIds = collectNodeImageArtifactIds(parentNode);
+    const workflow = buildImageArtifactWorkflow(node, parentNode, parentArtifactIds);
 
     return {
         event: {
@@ -293,21 +296,59 @@ function createImageArtifactRecordFromEvent(
             name,
             sizeBytes: estimateBase64Size(event.artifact.data),
             origin: 'generated',
-            createdAt: timestamp,
-            sourceNodeId: nodeId,
+            createdAt: node.timestamp,
+            sourceNodeId: node.id,
             sourceEventId: event.artifact.id,
+            parentArtifactIds: workflow?.sourceArtifactIds ?? parentArtifactIds,
+            workflow,
             model: event.artifact.model,
             label: event.artifact.label,
         },
     };
 }
 
+function collectNodeImageArtifactIds(node?: MessageNode): string[] {
+    if (!node) {
+        return [];
+    }
+
+    return [...new Set((node.attachments ?? []).flatMap((attachment) =>
+        attachment.kind === 'image' && attachment.artifactId ? [attachment.artifactId] : [],
+    ))];
+}
+
+function buildImageArtifactWorkflow(
+    node: MessageNode,
+    parentNode: MessageNode | undefined,
+    parentArtifactIds: string[],
+): ImageWorkflowMetadata | undefined {
+    const workflow = node.imageWorkflow ?? parentNode?.imageWorkflow;
+    if (workflow) {
+        return {
+            ...workflow,
+            sourceArtifactIds: workflow.sourceArtifactIds?.length ? workflow.sourceArtifactIds : parentArtifactIds,
+        };
+    }
+
+    const intent = node.sessionIntent ?? parentNode?.sessionIntent;
+    if (!intent || intent === 'ask') {
+        return undefined;
+    }
+
+    return {
+        intent,
+        sourceArtifactIds: parentArtifactIds,
+    };
+}
+
 function attachImageFileArtifactsToNode(
     node: MessageNode,
     existingArtifacts: Record<string, ImageFileArtifact>,
+    existingNodes: Record<string, MessageNode> = {},
 ): { node: MessageNode; artifacts: Record<string, ImageFileArtifact> } {
     let nextNode = node;
     const artifacts: Record<string, ImageFileArtifact> = {};
+    const parentNode = node.parentId ? existingNodes[node.parentId] : undefined;
 
     if ((node.attachments?.length ?? 0) > 0) {
         const attachments = node.attachments!.map((attachment) => {
@@ -330,7 +371,7 @@ function attachImageFileArtifactsToNode(
                 return event;
             }
 
-            const result = createImageArtifactRecordFromEvent(event, node.id, node.timestamp);
+            const result = createImageArtifactRecordFromEvent(event, node, parentNode);
             if (!existingArtifacts[result.artifact.id] && !artifacts[result.artifact.id]) {
                 artifacts[result.artifact.id] = result.artifact;
             }
@@ -864,7 +905,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         };
 
         set((state) => {
-            const { node: newNode, artifacts } = attachImageFileArtifactsToNode(baseNode, state.artifacts);
+            const { node: newNode, artifacts } = attachImageFileArtifactsToNode(baseNode, state.artifacts, state.nodes);
             const isFirstNode = Object.keys(state.nodes).length === 0;
             return {
                 nodes: { ...state.nodes, [id]: newNode },

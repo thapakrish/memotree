@@ -59,8 +59,17 @@ export interface ImageFileArtifact {
     sourceEventId?: string;
     sourceAttachmentId?: string;
     parentArtifactIds?: string[];
+    workflow?: ImageWorkflowMetadata;
     model?: string;
     label?: string;
+}
+
+export interface ImageWorkflowMetadata {
+    intent: SessionIntent;
+    prompt?: string;
+    sourceArtifactIds?: string[];
+    stylePresetId?: string;
+    styleLabel?: string;
 }
 
 export interface ImageArtifactStorageUpdate {
@@ -226,8 +235,10 @@ export interface MessageNode {
     role: 'user' | 'assistant' | 'system';
     content: string;
     responseMode?: AssistantResponseMode;
+    sessionIntent?: SessionIntent;
     attachments?: AttachmentPart[];
     events?: ChatEvent[];
+    imageWorkflow?: ImageWorkflowMetadata;
     mergeContext?: MergeContext;
     memoryPatches: MemoryPatch[];
     timestamp: string; // ISO string

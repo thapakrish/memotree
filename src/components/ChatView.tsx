@@ -1,7 +1,7 @@
 import { lazy, startTransition, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Send, CornerDownRight, Cpu, User, KeyRound, Loader2, BrainCircuit, Wrench, CheckCircle2, CircleAlert, FolderOpen, GitBranch, Undo2, Eye, Copy, Check, Square, Paperclip, X, ImageIcon, FileText, Music, ScanText, ArrowRight, Sparkles, RotateCcw, Pencil, Images } from 'lucide-react';
 import { useGraphStore } from '../store/useGraphStore';
-import type { AssistantResponseMode, AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, ImageArtifact, ImageFileArtifact, ImageFileUse, MessageNode, SessionIntent } from '../store/types';
+import type { AssistantResponseMode, AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, ImageArtifact, ImageFileArtifact, ImageFileUse, ImageWorkflowMetadata, MessageNode, SessionIntent } from '../store/types';
 import type { IProvider, ProviderFunctionCall, StreamDelta } from '../lib/providers';
 import { createProvider } from '../lib/providers';
 import { appendEvent, getFinalAnswerText, getImageArtifacts, getNodeSummary, mergeEvents } from '../lib/chatEvents';
@@ -502,6 +502,29 @@ function getIntentSummary(intent: SessionIntent, input: string, style?: StylePre
     return option?.label ?? 'Request';
 }
 
+function buildImageWorkflowMetadata(
+    intent: SessionIntent,
+    prompt: string,
+    attachments: AttachmentPart[],
+    style?: StylePreset,
+): ImageWorkflowMetadata | undefined {
+    if (intent === 'ask') {
+        return undefined;
+    }
+
+    const sourceArtifactIds = [...new Set(attachments.flatMap((attachment) =>
+        attachment.kind === 'image' && attachment.artifactId ? [attachment.artifactId] : [],
+    ))];
+
+    return {
+        intent,
+        prompt: prompt.trim() || undefined,
+        sourceArtifactIds,
+        stylePresetId: style?.id,
+        styleLabel: style?.label,
+    };
+}
+
 function getSessionIntentIcon(intent: SessionIntent) {
     switch (intent) {
         case 'ask':
@@ -618,12 +641,16 @@ function AssistantMessageBody({
     isStreaming,
     onUseImageArtifact,
     onEditImageArtifact,
+    onFitStyleImageArtifact,
+    onMakeVariantsImageArtifact,
 }: {
     events?: ChatEvent[];
     fallbackText: string;
     isStreaming?: boolean;
     onUseImageArtifact?: (artifact: ImageArtifact) => void;
     onEditImageArtifact?: (artifact: ImageArtifact) => void;
+    onFitStyleImageArtifact?: (artifact: ImageArtifact) => void;
+    onMakeVariantsImageArtifact?: (artifact: ImageArtifact) => void;
 }) {
     const messageEvents = events ?? [];
 
@@ -723,26 +750,46 @@ function AssistantMessageBody({
                                     <div className="truncate text-[11px] text-slate-400">
                                         {event.artifact.artifactPath ?? event.artifact.model ?? event.artifact.mimeType}
                                     </div>
-                                    {(onUseImageArtifact || onEditImageArtifact) && (
-                                        <div className="mt-2 flex flex-wrap items-center gap-1">
-                                            {onUseImageArtifact && (
-                                                <button
-                                                    onClick={() => onUseImageArtifact(event.artifact)}
-                                                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700"
-                                                    title="Add this image as context"
-                                                >
-                                                    <ImageIcon className="h-3 w-3" />
-                                                    Context
-                                                </button>
-                                            )}
+                                    {(onUseImageArtifact || onEditImageArtifact || onFitStyleImageArtifact || onMakeVariantsImageArtifact) && (
+                                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
                                             {onEditImageArtifact && (
                                                 <button
                                                     onClick={() => onEditImageArtifact(event.artifact)}
                                                     className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700"
-                                                    title="Use this image as the edit target"
+                                                    title="Use this image as the next source"
                                                 >
                                                     <Pencil className="h-3 w-3" />
-                                                    Edit
+                                                    Source
+                                                </button>
+                                            )}
+                                            {onFitStyleImageArtifact && (
+                                                <button
+                                                    onClick={() => onFitStyleImageArtifact(event.artifact)}
+                                                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700"
+                                                    title="Fit a style to this image"
+                                                >
+                                                    <Sparkles className="h-3 w-3" />
+                                                    Style
+                                                </button>
+                                            )}
+                                            {onMakeVariantsImageArtifact && (
+                                                <button
+                                                    onClick={() => onMakeVariantsImageArtifact(event.artifact)}
+                                                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700"
+                                                    title="Make variants from this image"
+                                                >
+                                                    <RotateCcw className="h-3 w-3" />
+                                                    Variants
+                                                </button>
+                                            )}
+                                            {onUseImageArtifact && (
+                                                <button
+                                                    onClick={() => onUseImageArtifact(event.artifact)}
+                                                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700"
+                                                    title="Use this image as reference context"
+                                                >
+                                                    <ImageIcon className="h-3 w-3" />
+                                                    Reference
                                                 </button>
                                             )}
                                         </div>
@@ -874,6 +921,20 @@ export function ChatView() {
         addAttachments([createAttachmentFromArtifact(artifact, 'edit_target')]);
         handleSelectSessionIntent('image_edit');
         showStatus('info', 'Generated image added as the edit target.');
+        requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+
+    const handleFitStyleArtifact = (artifact: ImageArtifact) => {
+        addAttachments([createAttachmentFromArtifact(artifact, 'edit_target')]);
+        handleSelectSessionIntent('style_fit');
+        showStatus('info', 'Generated image added as the source for style fitting.');
+        requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+
+    const handleMakeVariantsArtifact = (artifact: ImageArtifact) => {
+        addAttachments([createAttachmentFromArtifact(artifact, 'edit_target')]);
+        handleSelectSessionIntent('variants');
+        showStatus('info', 'Generated image added as the source for variants.');
         requestAnimationFrame(() => textareaRef.current?.focus());
     };
 
@@ -1322,12 +1383,15 @@ export function ChatView() {
             // Only save node if we got something (even if aborted mid-stream)
             if (events.length > 0) {
                 const assistantText = getFinalAnswerText(events) || getNodeSummary({ role: 'assistant', events, content: '' });
+                const parentNode = getPath(userNodeId).at(-1);
                 const assistantNodeId = addNode({
                     parentId: userNodeId,
                     role: 'assistant',
+                    sessionIntent: parentNode?.sessionIntent ?? sessionIntent,
                     responseMode: requestedResponseMode,
                     content: assistantText,
                     events,
+                    imageWorkflow: parentNode?.imageWorkflow,
                     memoryPatches: patches,
                     summary: getNodeSummary({ role: 'assistant', events, content: assistantText }),
                 });
@@ -1377,13 +1441,16 @@ export function ChatView() {
             showStatus('error', 'One selected image is missing file data and cannot be sent.');
             return;
         }
+        const imageWorkflow = buildImageWorkflowMetadata(sessionIntent, nextInput, nextAttachments, selectedStyle);
 
         const userNodeId = addNode({
             parentId,
             role: 'user',
+            sessionIntent,
             content: nextInput,
             responseMode: requestedResponseMode,
             attachments: nextAttachments.length > 0 ? nextAttachments : undefined,
+            imageWorkflow,
             memoryPatches: [],
             summary: getIntentSummary(sessionIntent, input, selectedStyle) || `Image request (${requestedResponseMode})`,
         });
@@ -1407,6 +1474,7 @@ export function ChatView() {
     const handleEditAndResend = (userNode: MessageNode) => {
         setActiveNode(userNode.parentId);
         setInput(userNode.content);
+        setSessionIntent(userNode.sessionIntent ?? 'ask');
         setResponseMode(userNode.responseMode ?? 'text');
         setAttachments(cloneAttachments(userNode.attachments ?? []));
         requestAnimationFrame(() => textareaRef.current?.focus());
@@ -1692,6 +1760,8 @@ export function ChatView() {
                                         fallbackText={msg.content}
                                         onUseImageArtifact={handleReuseArtifact}
                                         onEditImageArtifact={handleEditArtifact}
+                                        onFitStyleImageArtifact={handleFitStyleArtifact}
+                                        onMakeVariantsImageArtifact={handleMakeVariantsArtifact}
                                     />
                                 ) : (
                                     <div>
@@ -1805,6 +1875,8 @@ export function ChatView() {
                                     isStreaming
                                     onUseImageArtifact={handleReuseArtifact}
                                     onEditImageArtifact={handleEditArtifact}
+                                    onFitStyleImageArtifact={handleFitStyleArtifact}
+                                    onMakeVariantsImageArtifact={handleMakeVariantsArtifact}
                                 />
                             ) : (
                                 <div className="flex items-center gap-2 text-slate-400 h-6">
