@@ -45,10 +45,12 @@ Included by default:
 - image attachment input
 - branch-aware memory patch replay
 - context inspector
+- node selection, grouping, and reversible branch pruning
 
 Feature-flagged experiments:
 
 ```bash
+VITE_ENABLE_GRAPH_ORGANIZATION_TOOLS=true
 VITE_ENABLE_ADVANCED_GRAPH_TOOLS=true
 VITE_ENABLE_EXPERIMENTAL_IMPORTS=true
 VITE_ENABLE_IMPORT_INFERENCE=true

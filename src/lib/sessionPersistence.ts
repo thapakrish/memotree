@@ -63,6 +63,13 @@ export function validatePersistedSession(data: unknown): PersistedSession {
         throw new Error('Session compactions must be an object map.');
     }
 
+    if (
+        'prunedNodeRootIds' in graph &&
+        (!Array.isArray(graph.prunedNodeRootIds) || !graph.prunedNodeRootIds.every((id) => typeof id === 'string'))
+    ) {
+        throw new Error('Session pruned node roots must be a string array.');
+    }
+
     if ('rootId' in graph && graph.rootId !== null && typeof graph.rootId !== 'string') {
         throw new Error('Session rootId must be a string or null.');
     }

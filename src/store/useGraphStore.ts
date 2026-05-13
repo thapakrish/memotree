@@ -15,6 +15,7 @@ import { deriveSessionTitle, loadLastSession, loadSession, markLastSession, save
 import { applyAcceptedStructureSuggestions } from '../lib/import/applyStructureSuggestions';
 import { inferStructureRules } from '../lib/import/inferStructureRules';
 import { sanitizeImportedTurns } from '../lib/import/validateImportedTurns';
+import { collectNodeSubtreeIds, getNearestVisibleNodeId } from '../lib/graphTraversal';
 
 interface GraphState extends ConversationGraph {
     sessionId: string;
@@ -45,6 +46,8 @@ interface GraphState extends ConversationGraph {
     toggleNodeSelection: (id: string) => void;
     setSelectedNodeIds: (ids: string[]) => void;
     clearNodeSelection: () => void;
+    pruneNodes: (ids: string[]) => void;
+    restorePrunedNodes: () => void;
     addCompaction: (block: CompactionBlock) => void;
     removeCompaction: (id: string) => void;
     createGroup: (group: Omit<ContextGroup, 'id'>) => string;
@@ -71,6 +74,7 @@ function createEmptySessionState() {
         groups: {},
         uiPositions: {},
         compactions: {},
+        prunedNodeRootIds: [],
         rootId: null,
         activeNodeId: null,
         sessionTitle: undefined,
@@ -154,6 +158,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 groups: savedSession.graph.groups ?? {},
                 uiPositions: savedSession.graph.uiPositions ?? {},
                 compactions: savedSession.graph.compactions ?? {},
+                prunedNodeRootIds: savedSession.graph.prunedNodeRootIds ?? [],
                 sessionTitle: savedSession.graph.sessionTitle ?? savedSession.title,
                 providerId: savedSession.graph.providerId ?? 'gemini',
                 sessionId: savedSession.id,
@@ -203,6 +208,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             groups: savedSession.graph.groups ?? {},
             uiPositions: savedSession.graph.uiPositions ?? {},
             compactions: savedSession.graph.compactions ?? {},
+            prunedNodeRootIds: savedSession.graph.prunedNodeRootIds ?? [],
             sessionTitle: savedSession.graph.sessionTitle ?? savedSession.title,
             providerId: savedSession.graph.providerId ?? 'gemini',
             sessionId: savedSession.id,
@@ -224,6 +230,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             groups: validatedSession.graph.groups ?? {},
             uiPositions: validatedSession.graph.uiPositions ?? {},
             compactions: validatedSession.graph.compactions ?? {},
+            prunedNodeRootIds: validatedSession.graph.prunedNodeRootIds ?? [],
             sessionTitle: validatedSession.graph.sessionTitle ?? validatedSession.title,
             providerId: validatedSession.graph.providerId ?? 'gemini',
             sessionId: validatedSession.id,
@@ -288,6 +295,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             groups: {},
             uiPositions: {},
             compactions: {},
+            prunedNodeRootIds: [],
             providerId: get().providerId,
             rootId,
             activeNodeId: previousNodeId,
@@ -466,6 +474,28 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
     clearNodeSelection: () => set({ selectedNodeIds: [] }),
 
+    pruneNodes: (ids) => set((state) => {
+        const nextPrunedRootIds = [...new Set([
+            ...state.prunedNodeRootIds,
+            ...ids.filter((id) => id !== state.rootId && Boolean(state.nodes[id])),
+        ])];
+        const hiddenNodeIds = collectNodeSubtreeIds(state.nodes, nextPrunedRootIds);
+        const activeNodeId = state.activeNodeId && hiddenNodeIds.has(state.activeNodeId)
+            ? getNearestVisibleNodeId(state.nodes, state.activeNodeId, state.rootId, hiddenNodeIds)
+            : state.activeNodeId;
+
+        return {
+            prunedNodeRootIds: nextPrunedRootIds,
+            activeNodeId,
+            selectedNodeIds: [],
+        };
+    }),
+
+    restorePrunedNodes: () => set({
+        prunedNodeRootIds: [],
+        selectedNodeIds: [],
+    }),
+
     createGroup: (groupData) => {
         const id = crypto.randomUUID();
         const newGroup: ContextGroup = {
@@ -531,7 +561,18 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         },
     })),
 
-    setActiveNode: (id) => set({ activeNodeId: id }),
+    setActiveNode: (id) => set((state) => {
+        if (!id) {
+            return { activeNodeId: null };
+        }
+
+        const hiddenNodeIds = collectNodeSubtreeIds(state.nodes, state.prunedNodeRootIds);
+        if (hiddenNodeIds.has(id)) {
+            return state;
+        }
+
+        return { activeNodeId: id };
+    }),
     setApiKey: (key) => set({ apiKey: key }),
     setSessionTitle: (sessionTitle) => set({ sessionTitle }),
     setProviderId: (providerId) => set({ providerId }),
@@ -565,14 +606,17 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         if (!state.activeNodeId) return state;
         const currentNode = state.nodes[state.activeNodeId];
         if (!currentNode || !currentNode.parentId) return state;
+        const hiddenNodeIds = collectNodeSubtreeIds(state.nodes, state.prunedNodeRootIds);
+        if (hiddenNodeIds.has(currentNode.parentId)) return state;
         return { activeNodeId: currentNode.parentId };
     }),
 
     goToLatestChild: () => set((state) => {
         if (!state.activeNodeId) return state;
         const currentId = state.activeNodeId;
+        const hiddenNodeIds = collectNodeSubtreeIds(state.nodes, state.prunedNodeRootIds);
         const children = Object.values(state.nodes).filter(
-            (node) => node.parentId === currentId,
+            (node) => node.parentId === currentId && !hiddenNodeIds.has(node.id),
         );
 
         if (children.length === 0) return state;
@@ -588,9 +632,10 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         if (!state.activeNodeId) return state;
         const currentNode = state.nodes[state.activeNodeId];
         if (!currentNode || !currentNode.parentId) return state;
+        const hiddenNodeIds = collectNodeSubtreeIds(state.nodes, state.prunedNodeRootIds);
 
         const siblings = Object.values(state.nodes)
-            .filter((node) => node.parentId === currentNode.parentId)
+            .filter((node) => node.parentId === currentNode.parentId && !hiddenNodeIds.has(node.id))
             .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
         if (siblings.length <= 1) return state;
@@ -605,9 +650,10 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         if (!state.activeNodeId) return state;
         const currentNode = state.nodes[state.activeNodeId];
         if (!currentNode || !currentNode.parentId) return state;
+        const hiddenNodeIds = collectNodeSubtreeIds(state.nodes, state.prunedNodeRootIds);
 
         const siblings = Object.values(state.nodes)
-            .filter((node) => node.parentId === currentNode.parentId)
+            .filter((node) => node.parentId === currentNode.parentId && !hiddenNodeIds.has(node.id))
             .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
         if (siblings.length <= 1) return state;
@@ -653,6 +699,7 @@ useGraphStore.subscribe((state) => {
         groups: state.groups,
         uiPositions: state.uiPositions,
         compactions: state.compactions,
+        prunedNodeRootIds: state.prunedNodeRootIds,
         sessionTitle: state.sessionTitle,
         providerId: state.providerId,
         rootId: state.rootId,
@@ -675,6 +722,7 @@ useGraphStore.subscribe((state) => {
             groups: state.groups,
             uiPositions: state.uiPositions,
             compactions: state.compactions,
+            prunedNodeRootIds: state.prunedNodeRootIds,
             sessionTitle: state.sessionTitle,
             providerId: state.providerId,
             rootId: state.rootId,
@@ -686,6 +734,7 @@ useGraphStore.subscribe((state) => {
             groups: state.groups,
             uiPositions: state.uiPositions,
             compactions: state.compactions,
+            prunedNodeRootIds: state.prunedNodeRootIds,
             sessionTitle: state.sessionTitle,
             providerId: state.providerId,
             rootId: state.rootId,

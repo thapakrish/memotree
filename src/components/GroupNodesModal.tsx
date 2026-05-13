@@ -18,7 +18,6 @@ interface GroupNodesModalProps {
     onSubmit: (payload: {
         name: string;
         color: string;
-        contextMode: 'full' | 'compact' | 'result_only' | 'exclude';
     }) => void;
 }
 
@@ -31,7 +30,6 @@ export function GroupNodesModal({
 }: GroupNodesModalProps) {
     const [name, setName] = useState('');
     const [color, setColor] = useState(groupColors[0]);
-    const [contextMode, setContextMode] = useState<'full' | 'compact' | 'result_only' | 'exclude'>('compact');
 
     if (!isOpen) {
         return null;
@@ -48,7 +46,7 @@ export function GroupNodesModal({
                 <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
                     <div>
                         <h2 className="text-lg font-semibold text-slate-800">Create Group</h2>
-                        <p className="text-sm text-slate-500">Group {selectedCount} selected nodes into a reusable context entity.</p>
+                        <p className="text-sm text-slate-500">Group {selectedCount} selected nodes.</p>
                     </div>
                     <button onClick={onClose} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600">
                         <X className="h-4 w-4" />
@@ -80,31 +78,6 @@ export function GroupNodesModal({
                         </div>
                     </div>
 
-                    <div>
-                        <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Context Mode</label>
-                        <div className="space-y-2">
-                            {[
-                                ['full', 'Full', 'Carry raw group nodes forward.'],
-                                ['compact', 'Compact', 'Prefer a curated summary for future context.'],
-                                ['result_only', 'Result Only', 'Only carry the group outcome.'],
-                                ['exclude', 'Exclude', 'Hide from future context unless explicitly requested.'],
-                            ].map(([value, label, description]) => (
-                                <label key={value} className="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 hover:border-blue-300 hover:bg-slate-50">
-                                    <input
-                                        type="radio"
-                                        name="group-context-mode"
-                                        checked={contextMode === value}
-                                        onChange={() => setContextMode(value as 'full' | 'compact' | 'result_only' | 'exclude')}
-                                        className="mt-1"
-                                    />
-                                    <div>
-                                        <div className="text-sm font-medium text-slate-800">{label}</div>
-                                        <div className="text-xs text-slate-500">{description}</div>
-                                    </div>
-                                </label>
-                            ))}
-                        </div>
-                    </div>
                 </div>
 
                 <div className="flex items-center justify-end gap-3 border-t border-slate-100 px-6 py-4">
@@ -116,7 +89,7 @@ export function GroupNodesModal({
                     </button>
                     <button
                         disabled={!name.trim() || isSubmitting}
-                        onClick={() => onSubmit({ name, color, contextMode })}
+                        onClick={() => onSubmit({ name, color })}
                         className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         <FolderTree className="h-4 w-4" />

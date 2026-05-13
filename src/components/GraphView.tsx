@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ReactFlow,
     Controls,
@@ -13,7 +13,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-import { FolderTree, GitMerge, GitCompare, MousePointer2, SquareDashedMousePointer } from 'lucide-react';
+import { FolderTree, GitBranch, GitCompare, GitMerge, MousePointer2, Network, RotateCcw, Scissors, SquareDashedMousePointer } from 'lucide-react';
 import { useGraphStore } from '../store/useGraphStore';
 import { CustomNode } from './CustomNode';
 import { getLayoutedElements } from '../lib/layout';
@@ -27,6 +27,7 @@ import type { ChatEvent, MergeContextMode } from '../store/types';
 import { reconstructMemory } from '../lib/memoryEngine';
 import { buildImportedPathGroups, getImportedPathGroupPositionKey } from '../lib/import/pathGroups';
 import { featureFlags } from '../config/featureFlags';
+import { collectNodeSubtreeIds } from '../lib/graphTraversal';
 
 const nodeTypes = {
     custom: CustomNode,
@@ -39,13 +40,17 @@ export function GraphView() {
         groups: storeGroups,
         uiPositions,
         activeNodeId,
+        rootId,
         apiKey,
+        prunedNodeRootIds,
         selectedNodeIds,
         setActiveNode,
         updateNodeSummary,
         toggleNodeSelection,
         setSelectedNodeIds,
         clearNodeSelection,
+        pruneNodes,
+        restorePrunedNodes,
         createGroup,
         addNode,
         setUiPosition,
@@ -65,6 +70,33 @@ export function GraphView() {
     const { setCenter } = useReactFlow();
     const renderedNodes = previewNodes ?? storeNodes;
     const renderedImportEnvelope = previewImportEnvelope ?? importEnvelope;
+    const canUseOrganizationTools = featureFlags.graphOrganizationTools;
+    const prunedNodeIds = useMemo(
+        () => collectNodeSubtreeIds(renderedNodes, prunedNodeRootIds),
+        [renderedNodes, prunedNodeRootIds],
+    );
+    const visibleNodes = useMemo(() => {
+        if (prunedNodeIds.size === 0) {
+            return renderedNodes;
+        }
+
+        return Object.fromEntries(
+            Object.entries(renderedNodes).filter(([nodeId]) => !prunedNodeIds.has(nodeId)),
+        );
+    }, [prunedNodeIds, renderedNodes]);
+    const activePathIds = useMemo(
+        () => getPath(activeNodeId).map((node) => node.id).filter((id) => visibleNodes[id]),
+        [activeNodeId, getPath, visibleNodes],
+    );
+    const selectedNodes = selectedNodeIds
+        .map((id) => visibleNodes[id])
+        .filter(Boolean);
+    const visibleSelectedNodeIds = selectedNodes.map((node) => node.id);
+    const prunableSelectedNodeIds = visibleSelectedNodeIds.filter((id) => id !== rootId);
+    const canGroupSelected = canUseOrganizationTools && selectedNodes.length > 0;
+    const canPruneSelected = canUseOrganizationTools && prunableSelectedNodeIds.length > 0;
+    const canMergeSelected = featureFlags.advancedGraphTools && selectedNodes.length === 2 && selectedNodes.every(isMergeableAssistant) && !!apiKey;
+    const canCompareSelected = featureFlags.advancedGraphTools && selectedNodes.length === 2;
 
     const getPathGroupSavedPosition = useCallback((pathGroup: { id: string; nodeIds: string[]; primaryNodeId: string }) => {
         return (
@@ -77,7 +109,7 @@ export function GraphView() {
     useEffect(() => {
         const rawNodes: Node[] = [];
         const rawEdges: Edge[] = [];
-        const pathGroups = buildImportedPathGroups({ nodes: renderedNodes, importEnvelope: renderedImportEnvelope });
+        const pathGroups = buildImportedPathGroups({ nodes: visibleNodes, importEnvelope: renderedImportEnvelope });
         const displayIdByImportedNodeId = new Map<string, string>();
 
         for (const pathGroup of pathGroups) {
@@ -124,7 +156,7 @@ export function GraphView() {
             });
         });
 
-        Object.values(renderedNodes).forEach((node) => {
+        Object.values(visibleNodes).forEach((node) => {
             if (node.importMetadata?.origin === 'imported' && pathGroups.length > 0) {
                 return;
             }
@@ -189,7 +221,7 @@ export function GraphView() {
         const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(rawNodes, rawEdges, 'TB', uiPositions);
         setNodes(layoutedNodes);
         setEdges(layoutedEdges);
-    }, [renderedNodes, storeGroups, activeNodeId, selectedNodeIds, setNodes, setEdges, renderedImportEnvelope, uiPositions, getPathGroupSavedPosition, clearNodeSelection, setActiveNode, updateNodeSummary]);
+    }, [visibleNodes, storeGroups, activeNodeId, selectedNodeIds, setNodes, setEdges, renderedImportEnvelope, uiPositions, getPathGroupSavedPosition, clearNodeSelection, setActiveNode, updateNodeSummary]);
 
     useEffect(() => {
         if (activeNodeId && rfNodes.length > 0) {
@@ -207,7 +239,7 @@ export function GraphView() {
 
     useEffect(() => {
         const handleSelectionShortcuts = (event: KeyboardEvent) => {
-            if (!featureFlags.advancedGraphTools) {
+            if (!canUseOrganizationTools) {
                 return;
             }
             const target = event.target as HTMLElement | null;
@@ -229,24 +261,24 @@ export function GraphView() {
 
         window.addEventListener('keydown', handleSelectionShortcuts);
         return () => window.removeEventListener('keydown', handleSelectionShortcuts);
-    }, [clearNodeSelection]);
+    }, [canUseOrganizationTools, clearNodeSelection]);
 
     const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
         const nodeData = node.data as { pathGroup?: { primaryNodeId: string } };
         const targetNodeId = nodeData.pathGroup?.primaryNodeId ?? node.id;
-        if (isSelectionMode) {
+        if (canUseOrganizationTools && isSelectionMode) {
             toggleNodeSelection(targetNodeId);
             return;
         }
 
-        if (event.shiftKey || event.metaKey || event.ctrlKey) {
+        if (canUseOrganizationTools && (event.shiftKey || event.metaKey || event.ctrlKey)) {
             toggleNodeSelection(targetNodeId);
             return;
         }
 
         clearNodeSelection();
         setActiveNode(targetNodeId);
-    }, [clearNodeSelection, isSelectionMode, setActiveNode, toggleNodeSelection]);
+    }, [canUseOrganizationTools, clearNodeSelection, isSelectionMode, setActiveNode, toggleNodeSelection]);
 
     const handleSelectionModeToggle = () => {
         setIsSelectionMode((current) => {
@@ -275,12 +307,33 @@ export function GraphView() {
         setUiPosition(node.id, node.position);
     }, [setUiPosition]);
 
-    const selectedNodes = selectedNodeIds
-        .map((id) => renderedNodes[id] ?? storeNodes[id])
-        .filter(Boolean);
-    const canMergeSelected = featureFlags.advancedGraphTools && selectedNodes.length === 2 && selectedNodes.every(isMergeableAssistant) && !!apiKey;
-    const canGroupSelected = featureFlags.advancedGraphTools && selectedNodes.length > 0;
-    const canCompareSelected = featureFlags.advancedGraphTools && selectedNodes.length === 2;
+    const handleSelectActivePath = useCallback(() => {
+        if (activePathIds.length === 0) {
+            return;
+        }
+
+        setSelectedNodeIds(activePathIds);
+        setIsSelectionMode(true);
+    }, [activePathIds, setSelectedNodeIds]);
+
+    const handleSelectActiveSubtree = useCallback(() => {
+        if (!activeNodeId) {
+            return;
+        }
+
+        const subtreeIds = [...collectNodeSubtreeIds(renderedNodes, [activeNodeId])]
+            .filter((id) => visibleNodes[id]);
+        setSelectedNodeIds(subtreeIds);
+        setIsSelectionMode(true);
+    }, [activeNodeId, renderedNodes, setSelectedNodeIds, visibleNodes]);
+
+    const handlePruneSelected = useCallback(() => {
+        if (prunableSelectedNodeIds.length === 0) {
+            return;
+        }
+
+        pruneNodes(prunableSelectedNodeIds);
+    }, [prunableSelectedNodeIds, pruneNodes]);
 
     const handleMergeSubmit = async (instruction: string, mode: MergeContextMode) => {
         if (!apiKey || selectedNodes.length !== 2) {
@@ -359,18 +412,16 @@ export function GraphView() {
     const handleGroupSubmit = ({
         name,
         color,
-        contextMode,
     }: {
         name: string;
         color: string;
-        contextMode: 'full' | 'compact' | 'result_only' | 'exclude';
     }) => {
         setIsGrouping(true);
         try {
             createGroup({
                 name,
                 color,
-                contextMode,
+                contextMode: 'compact',
                 nodeIds: selectedNodes.map((node) => node.id),
             });
             setIsGroupModalOpen(false);
@@ -385,7 +436,7 @@ export function GraphView() {
                 <div className="font-semibold text-slate-700 bg-white px-4 py-2 rounded-lg shadow-sm border border-slate-200">
                     Memory Tree Map
                 </div>
-                {featureFlags.advancedGraphTools && (
+                {canUseOrganizationTools && (
                     <>
                         <button
                             onClick={handleSelectionModeToggle}
@@ -396,30 +447,23 @@ export function GraphView() {
                             }`}
                         >
                             {isSelectionMode ? <SquareDashedMousePointer className="h-4 w-4" /> : <MousePointer2 className="h-4 w-4" />}
-                            <span>{isSelectionMode ? 'Selecting Nodes' : 'Select Nodes'}</span>
+                            <span>{isSelectionMode ? `${visibleSelectedNodeIds.length} Selected` : 'Select'}</span>
                         </button>
                         <button
-                            onClick={handleClearSelection}
-                            disabled={selectedNodeIds.length === 0}
-                            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={handleSelectActivePath}
+                            disabled={!activeNodeId || activePathIds.length === 0}
+                            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            <span>Clear Selection</span>
+                            <GitBranch className="h-4 w-4" />
+                            <span>Path</span>
                         </button>
                         <button
-                            onClick={() => setIsCompareModalOpen(true)}
-                            disabled={!canCompareSelected}
-                            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={handleSelectActiveSubtree}
+                            disabled={!activeNodeId || !visibleNodes[activeNodeId]}
+                            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            <GitCompare className="h-4 w-4" />
-                            <span>Compare Paths</span>
-                        </button>
-                        <button
-                            onClick={() => setIsMergeModalOpen(true)}
-                            disabled={!canMergeSelected}
-                            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-fuchsia-300 hover:bg-fuchsia-50 hover:text-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            <GitMerge className="h-4 w-4" />
-                            <span>Merge Selected</span>
+                            <Network className="h-4 w-4" />
+                            <span>Subtree</span>
                         </button>
                         <button
                             onClick={() => setIsGroupModalOpen(true)}
@@ -427,8 +471,52 @@ export function GraphView() {
                             className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                             <FolderTree className="h-4 w-4" />
-                            <span>Group Selected</span>
+                            <span>Group</span>
                         </button>
+                        <button
+                            onClick={handlePruneSelected}
+                            disabled={!canPruneSelected}
+                            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <Scissors className="h-4 w-4" />
+                            <span>Prune</span>
+                        </button>
+                        {prunedNodeRootIds.length > 0 && (
+                            <button
+                                onClick={restorePrunedNodes}
+                                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-100"
+                            >
+                                <RotateCcw className="h-4 w-4" />
+                                <span>Restore {prunedNodeIds.size}</span>
+                            </button>
+                        )}
+                        <button
+                            onClick={handleClearSelection}
+                            disabled={visibleSelectedNodeIds.length === 0}
+                            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <span>Clear</span>
+                        </button>
+                        {featureFlags.advancedGraphTools && (
+                            <>
+                                <button
+                                    onClick={() => setIsCompareModalOpen(true)}
+                                    disabled={!canCompareSelected}
+                                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    <GitCompare className="h-4 w-4" />
+                                    <span>Compare</span>
+                                </button>
+                                <button
+                                    onClick={() => setIsMergeModalOpen(true)}
+                                    disabled={!canMergeSelected}
+                                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-fuchsia-300 hover:bg-fuchsia-50 hover:text-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    <GitMerge className="h-4 w-4" />
+                                    <span>Merge</span>
+                                </button>
+                            </>
+                        )}
                     </>
                 )}
             </div>
@@ -451,27 +539,19 @@ export function GraphView() {
                     }));
                 }}
                 nodeTypes={nodeTypes}
-                elementsSelectable={featureFlags.advancedGraphTools && isSelectionMode}
+                elementsSelectable={canUseOrganizationTools && isSelectionMode}
                 selectionKeyCode={null}
-                selectionOnDrag={featureFlags.advancedGraphTools && isSelectionMode}
+                selectionOnDrag={canUseOrganizationTools && isSelectionMode}
                 selectionMode={SelectionMode.Partial}
                 multiSelectionKeyCode={null}
-                panOnDrag={!featureFlags.advancedGraphTools || !isSelectionMode}
+                panOnDrag={!canUseOrganizationTools || !isSelectionMode}
                 fitView
             >
                 <Background />
                 <Controls />
             </ReactFlow>
-            {featureFlags.advancedGraphTools && (
+            {canUseOrganizationTools && (
                 <>
-                    <MergeBranchesModal
-                        isOpen={isMergeModalOpen}
-                        leftNode={selectedNodes[0]}
-                        rightNode={selectedNodes[1]}
-                        isSubmitting={isMerging}
-                        onClose={() => setIsMergeModalOpen(false)}
-                        onSubmit={handleMergeSubmit}
-                    />
                     <GroupNodesModal
                         isOpen={isGroupModalOpen}
                         selectedCount={selectedNodes.length}
@@ -479,14 +559,26 @@ export function GraphView() {
                         onClose={() => setIsGroupModalOpen(false)}
                         onSubmit={handleGroupSubmit}
                     />
-                    <PathCompareModal
-                        isOpen={isCompareModalOpen}
-                        leftNode={selectedNodes[0]}
-                        rightNode={selectedNodes[1]}
-                        getPath={getPath}
-                        onClose={() => setIsCompareModalOpen(false)}
-                        onNavigate={(id) => setActiveNode(id)}
-                    />
+                    {featureFlags.advancedGraphTools && (
+                        <>
+                            <MergeBranchesModal
+                                isOpen={isMergeModalOpen}
+                                leftNode={selectedNodes[0]}
+                                rightNode={selectedNodes[1]}
+                                isSubmitting={isMerging}
+                                onClose={() => setIsMergeModalOpen(false)}
+                                onSubmit={handleMergeSubmit}
+                            />
+                            <PathCompareModal
+                                isOpen={isCompareModalOpen}
+                                leftNode={selectedNodes[0]}
+                                rightNode={selectedNodes[1]}
+                                getPath={getPath}
+                                onClose={() => setIsCompareModalOpen(false)}
+                                onNavigate={(id) => setActiveNode(id)}
+                            />
+                        </>
+                    )}
                 </>
             )}
         </div>

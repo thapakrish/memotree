@@ -64,7 +64,7 @@ export function ShortcutsPanel() {
                     </>
                 )}
 
-                {featureFlags.advancedGraphTools && (
+                {featureFlags.graphOrganizationTools && (
                     <>
                         <Divider />
                         <Row label="Toggle Select Mode" keys={<Kbd wide>V</Kbd>} />

@@ -189,6 +189,7 @@ export interface ConversationGraph {
     groups: Record<string, ContextGroup>;
     uiPositions: Record<string, GraphUiPosition>;
     compactions: Record<string, CompactionBlock>;
+    prunedNodeRootIds: string[];
     rootId: string | null;
     activeNodeId: string | null;
     sessionTitle?: string;
