@@ -13,6 +13,12 @@ Linear chat makes it hard to explore alternatives without dragging failed attemp
 
 The product claim is context control, not magic hallucination prevention: MemoTree helps you see and manage what the model saw.
 
+## Inspiration
+
+MemoTree is inspired in part by Toby Cubitt's Emacs [`undo-tree`](https://elpa.gnu.org/packages/undo-tree.html) package, which makes editing history explicit as a branching tree instead of treating undo and redo as a single linear stack. MemoTree applies that interaction idea to LLM conversations: alternate directions, failed attempts, and exploratory branches stay navigable instead of collapsing into one prompt history.
+
+This is an acknowledgement of an interaction lineage, not a dependency or port. The broader lineage also includes Vim's built-in undo branches, which the [`undo-tree` author notes](https://www.dr-qubit.org/undo-tree.html) as an inspiration for the Emacs package.
+
 ## Local BYOK Setup
 
 MemoTree is a frontend-only Vite app. There is no backend service to start, no database to provision, and no hosted account required. Your chat sessions are stored in your browser's IndexedDB, and your API key is used only by the local browser session.
