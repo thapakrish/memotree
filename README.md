@@ -15,14 +15,18 @@ The product claim is context control, not magic hallucination prevention: MemoTr
 
 ## Local BYOK Setup
 
-MemoTree is distributed as a frontend-only Vite app. Your chat sessions are stored in your browser's IndexedDB, and your API key is used by the local browser session.
+MemoTree is a frontend-only Vite app. There is no backend service to start, no database to provision, and no hosted account required. Your chat sessions are stored in your browser's IndexedDB, and your API key is used only by the local browser session.
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open the local Vite URL, paste your Gemini API key when prompted, and start a session.
+Open the local Vite URL, paste your Gemini API key when prompted, and start a session. The default development URL is usually:
+
+```text
+http://localhost:5173/
+```
 
 For private local development you can also set `VITE_GEMINI_API_KEY`, but do not use that for a public/static deployment because Vite embeds client env vars into the built JavaScript bundle.
 
@@ -52,7 +56,6 @@ Feature-flagged experiments:
 ```bash
 VITE_ENABLE_GRAPH_ORGANIZATION_TOOLS=true
 VITE_ENABLE_ADVANCED_GRAPH_TOOLS=true
-VITE_ENABLE_EXPERIMENTAL_IMPORTS=true
 VITE_ENABLE_IMPORT_INFERENCE=true
 VITE_ENABLE_RICH_FILE_ATTACHMENTS=true
 VITE_ENABLE_CONTEXT_COMPACTION=true
@@ -60,7 +63,7 @@ VITE_ENABLE_KEYBOARD_POWER_TOOLS=true
 VITE_ENABLE_IMPORT_PROVENANCE_WARNINGS=true
 ```
 
-Shared-link fetching and server-backed import are intentionally excluded from the default frontend-only distribution.
+Shared-link fetching and server-backed import are intentionally excluded from this frontend-only distribution. Importing a pasted visible transcript is supported locally.
 
 ## Privacy Notes
 

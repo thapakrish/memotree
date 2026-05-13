@@ -8,7 +8,6 @@ function envFlag(name: string, fallback = false) {
 export const featureFlags = {
     graphOrganizationTools: envFlag('VITE_ENABLE_GRAPH_ORGANIZATION_TOOLS', true),
     advancedGraphTools: envFlag('VITE_ENABLE_ADVANCED_GRAPH_TOOLS', false),
-    experimentalImports: envFlag('VITE_ENABLE_EXPERIMENTAL_IMPORTS', false),
     importInference: envFlag('VITE_ENABLE_IMPORT_INFERENCE', false),
     richFileAttachments: envFlag('VITE_ENABLE_RICH_FILE_ATTACHMENTS', false),
     contextCompaction: envFlag('VITE_ENABLE_CONTEXT_COMPACTION', false),
