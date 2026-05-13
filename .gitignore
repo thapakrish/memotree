@@ -29,6 +29,13 @@ backend/**/__pycache__/
 backend/**/*.pyc
 backend/*.egg-info/
 
+# Local generated/runtime artifacts
+artifacts/
+example/
+.claude/
+test-claude.ts
+test-thinking.ts
+
 # Local environment and secrets
 .env
 .env.*
