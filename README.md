@@ -51,6 +51,98 @@ MemoTree is inspired in part by Toby Cubitt's Emacs [`undo-tree`](https://elpa.g
 
 Gemini is the currently wired model provider. Model requests happen directly from your browser using your own API key.
 
+## Data Model
+
+At rest, a MemoTree session is a `ConversationGraph`: a map of message nodes, the root and active checkpoint, visual organization metadata, and optional context metadata. The conversation path is the core data model, but supporting state is stored beside it so the tree remains navigable across reloads.
+
+The default conversation path behaves like a tree because each `MessageNode` has a primary `parentId`; the schema is DAG-capable because nodes can also store `parentIds` for merge-style workflows.
+
+```mermaid
+classDiagram
+    direction LR
+
+    class ConversationGraph {
+        nodes
+        groups
+        uiPositions
+        compactions
+        prunedNodeRootIds
+        rootId
+        activeNodeId
+    }
+
+    class MessageNode {
+        id
+        role
+        parentId
+        parentIds
+        groupIds
+        content
+        summary
+        attachments
+        events
+        memoryPatches
+        timestamp
+    }
+
+    class MemoryPatch {
+        path
+        diffText
+        timestamp
+    }
+
+    class ChatEvent {
+        kind
+        text
+        toolName
+        payload
+    }
+
+    class AttachmentPart {
+        id
+        kind
+        mimeType
+        data
+    }
+
+    class ContextGroup {
+        id
+        name
+        color
+        nodeIds
+    }
+
+    class GraphUiPosition {
+        x
+        y
+    }
+
+    class CompactionBlock {
+        id
+        nodeIds
+        summary
+        createdAt
+    }
+
+    ConversationGraph "1" *-- "*" MessageNode : nodes
+    ConversationGraph "1" *-- "*" ContextGroup : groups
+    ConversationGraph "1" *-- "*" GraphUiPosition : uiPositions
+    ConversationGraph "1" *-- "*" CompactionBlock : compactions
+    MessageNode "0..1" --> MessageNode : parentId
+    MessageNode "*" --> "*" MessageNode : parentIds
+    MessageNode "1" *-- "*" MemoryPatch : memoryPatches
+    MessageNode "1" *-- "*" ChatEvent : events
+    MessageNode "1" *-- "*" AttachmentPart : attachments
+    ContextGroup "*" --> "*" MessageNode : nodeIds/groupIds
+    CompactionBlock "*" --> "*" MessageNode : nodeIds
+```
+
+For a model request, MemoTree resolves `activeNodeId`, walks the primary `parentId` chain back to `rootId`, reverses that path, and sends only those nodes as prompt history. Branches that are not on the active path remain in the graph but are not included in that request.
+
+Memory is also branch-local. MemoTree starts from an empty memory object and replays only the `memoryPatches` attached to nodes on the active path, rather than using one global memory buffer for all branches.
+
+Visual metadata does not decide what the model sees. Groups, saved node positions, summaries, and pruned branch roots help users organize the map, while prompt construction still follows the active conversation path. Compaction blocks, when enabled, summarize selected path ranges without changing the graph lineage.
+
 ## Development
 
 - `npm run dev` starts the local frontend.
