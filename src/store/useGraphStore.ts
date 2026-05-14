@@ -17,6 +17,9 @@ import { inferStructureRules } from '../lib/import/inferStructureRules';
 import { sanitizeImportedTurns } from '../lib/import/validateImportedTurns';
 import { collectNodeSubtreeIds, getNearestVisibleNodeId } from '../lib/graphTraversal';
 
+const DEFAULT_OLLAMA_BASE_URL = import.meta.env.VITE_OLLAMA_BASE_URL || 'http://localhost:11434';
+const DEFAULT_OLLAMA_MODEL = import.meta.env.VITE_OLLAMA_MODEL || '';
+
 interface GraphState extends ConversationGraph {
     sessionId: string;
     createdAt: string;
@@ -58,6 +61,8 @@ interface GraphState extends ConversationGraph {
     addMemoryPatch: (nodeId: string, patch: MemoryPatch) => void;
     getPath: (nodeId: string | null) => MessageNode[];
     setApiKey: (key: string) => void;
+    setOllamaBaseUrl: (baseUrl: string) => void;
+    setOllamaModel: (model: string) => void;
     setSessionTitle: (title: string) => void;
     setProviderId: (providerId: ProviderId) => void;
     goToParent: () => void;
@@ -79,6 +84,8 @@ function createEmptySessionState() {
         activeNodeId: null,
         sessionTitle: undefined,
         providerId: 'gemini' as ProviderId,
+        ollamaBaseUrl: DEFAULT_OLLAMA_BASE_URL,
+        ollamaModel: DEFAULT_OLLAMA_MODEL,
         importEnvelope: undefined,
         previewNodes: null,
         previewImportEnvelope: null,
@@ -161,6 +168,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 prunedNodeRootIds: savedSession.graph.prunedNodeRootIds ?? [],
                 sessionTitle: savedSession.graph.sessionTitle ?? savedSession.title,
                 providerId: savedSession.graph.providerId ?? 'gemini',
+                ollamaBaseUrl: savedSession.graph.ollamaBaseUrl ?? DEFAULT_OLLAMA_BASE_URL,
+                ollamaModel: savedSession.graph.ollamaModel ?? DEFAULT_OLLAMA_MODEL,
                 sessionId: savedSession.id,
                 createdAt: savedSession.createdAt,
                 apiKey: import.meta.env.VITE_GEMINI_API_KEY || null,
@@ -190,6 +199,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             apiKey: get().apiKey,
             sessionTitle: undefined,
             providerId: get().providerId,
+            ollamaBaseUrl: get().ollamaBaseUrl,
+            ollamaModel: get().ollamaModel,
             isHydrated: true,
             selectedNodeIds: [],
         });
@@ -211,6 +222,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             prunedNodeRootIds: savedSession.graph.prunedNodeRootIds ?? [],
             sessionTitle: savedSession.graph.sessionTitle ?? savedSession.title,
             providerId: savedSession.graph.providerId ?? 'gemini',
+            ollamaBaseUrl: savedSession.graph.ollamaBaseUrl ?? get().ollamaBaseUrl,
+            ollamaModel: savedSession.graph.ollamaModel ?? get().ollamaModel,
             sessionId: savedSession.id,
             createdAt: savedSession.createdAt,
             apiKey: get().apiKey,
@@ -233,6 +246,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             prunedNodeRootIds: validatedSession.graph.prunedNodeRootIds ?? [],
             sessionTitle: validatedSession.graph.sessionTitle ?? validatedSession.title,
             providerId: validatedSession.graph.providerId ?? 'gemini',
+            ollamaBaseUrl: validatedSession.graph.ollamaBaseUrl ?? get().ollamaBaseUrl,
+            ollamaModel: validatedSession.graph.ollamaModel ?? get().ollamaModel,
             sessionId: validatedSession.id,
             createdAt: validatedSession.createdAt,
             apiKey: get().apiKey,
@@ -297,6 +312,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             compactions: {},
             prunedNodeRootIds: [],
             providerId: get().providerId,
+            ollamaBaseUrl: get().ollamaBaseUrl,
+            ollamaModel: get().ollamaModel,
             rootId,
             activeNodeId: previousNodeId,
             importEnvelope: {
@@ -574,6 +591,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         return { activeNodeId: id };
     }),
     setApiKey: (key) => set({ apiKey: key }),
+    setOllamaBaseUrl: (ollamaBaseUrl) => set({ ollamaBaseUrl }),
+    setOllamaModel: (ollamaModel) => set({ ollamaModel }),
     setSessionTitle: (sessionTitle) => set({ sessionTitle }),
     setProviderId: (providerId) => set({ providerId }),
 
@@ -702,6 +721,8 @@ useGraphStore.subscribe((state) => {
         prunedNodeRootIds: state.prunedNodeRootIds,
         sessionTitle: state.sessionTitle,
         providerId: state.providerId,
+        ollamaBaseUrl: state.ollamaBaseUrl,
+        ollamaModel: state.ollamaModel,
         rootId: state.rootId,
         activeNodeId: state.activeNodeId,
         importEnvelope: state.importEnvelope,
@@ -725,6 +746,8 @@ useGraphStore.subscribe((state) => {
             prunedNodeRootIds: state.prunedNodeRootIds,
             sessionTitle: state.sessionTitle,
             providerId: state.providerId,
+            ollamaBaseUrl: state.ollamaBaseUrl,
+            ollamaModel: state.ollamaModel,
             rootId: state.rootId,
             activeNodeId: state.activeNodeId,
             importEnvelope: state.importEnvelope,
@@ -737,6 +760,8 @@ useGraphStore.subscribe((state) => {
             prunedNodeRootIds: state.prunedNodeRootIds,
             sessionTitle: state.sessionTitle,
             providerId: state.providerId,
+            ollamaBaseUrl: state.ollamaBaseUrl,
+            ollamaModel: state.ollamaModel,
             rootId: state.rootId,
             activeNodeId: state.activeNodeId,
             importEnvelope: state.importEnvelope,

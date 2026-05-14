@@ -4,7 +4,7 @@ import { useGraphStore } from '../store/useGraphStore';
 import type { AttachmentMimeType, AttachmentPart, ChatEvent, CompactionBlock, MessageNode } from '../store/types';
 import { getAssistantText, interceptMemoryTool } from '../lib/geminiEngine';
 import type { IProvider, ProviderFunctionCall, StreamDelta } from '../lib/providers';
-import { createProvider } from '../lib/providers';
+import { createProvider, getOllamaModelCapabilities, listOllamaModels, type OllamaModelCapabilities, type ProviderId } from '../lib/providers';
 import { appendEvent, getFinalAnswerText, getNodeSummary, mergeEvents } from '../lib/chatEvents';
 import { reconstructMemory } from '../lib/memoryEngine';
 import { SessionsModal } from './SessionsModal';
@@ -32,6 +32,66 @@ function describeAttachment(attachment: AttachmentPart): string {
     const label = attachment.name || attachment.kind.toUpperCase();
     const size = formatBytes(attachment.sizeBytes);
     return size ? `${label} (${attachment.mimeType}, ${size})` : `${label} (${attachment.mimeType})`;
+}
+
+function getProviderLabel(providerId?: ProviderId) {
+    switch (providerId) {
+        case 'ollama':
+            return 'Ollama';
+        case 'gemini':
+        default:
+            return 'Gemini';
+    }
+}
+
+const OLLAMA_MODELS_CACHE_KEY = 'memotree.ollamaModels';
+const COMMON_OLLAMA_MODELS = [
+    'gemma3:latest',
+    'llama3.2:latest',
+    'qwen3:latest',
+    'qwen2.5:latest',
+    'mistral:latest',
+];
+
+function readCachedOllamaModels(): string[] {
+    if (typeof window === 'undefined') return [];
+
+    try {
+        const raw = window.localStorage.getItem(OLLAMA_MODELS_CACHE_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+    } catch {
+        return [];
+    }
+}
+
+function writeCachedOllamaModels(models: string[]) {
+    if (typeof window === 'undefined') return;
+
+    try {
+        window.localStorage.setItem(OLLAMA_MODELS_CACHE_KEY, JSON.stringify(models));
+    } catch {
+        // Model discovery is a convenience; localStorage may be unavailable in some browser modes.
+    }
+}
+
+function choosePreferredOllamaModel(models: string[]): string | undefined {
+    const byName = new Map(models.map((model) => [model.toLowerCase(), model]));
+
+    for (const preferred of COMMON_OLLAMA_MODELS) {
+        const exactMatch = byName.get(preferred.toLowerCase());
+        if (exactMatch) return exactMatch;
+    }
+
+    const preferredPrefixes = COMMON_OLLAMA_MODELS.map((model) => model.split(':')[0]?.toLowerCase()).filter(Boolean);
+    return models.find((model) => {
+        const normalized = model.toLowerCase();
+        return preferredPrefixes.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix}:`));
+    }) ?? models[0];
+}
+
+function ollamaCapabilityKey(baseUrl: string, model: string) {
+    return `${baseUrl.trim()}::${model.trim()}`;
 }
 
 function buildBranchMarkdown(path: MessageNode[]): string {
@@ -366,8 +426,13 @@ export function ChatView() {
         addNode,
         setActiveNode,
         providerId,
+        setProviderId,
         apiKey,
         setApiKey,
+        ollamaBaseUrl,
+        ollamaModel,
+        setOllamaBaseUrl,
+        setOllamaModel,
         importEnvelope,
         previewImportEnvelope,
         applyAcceptedImportSuggestions,
@@ -390,16 +455,51 @@ export function ChatView() {
     const [isCompacting, setIsCompacting] = useState(false);
     const [branchCopied, setBranchCopied] = useState(false);
     const [branchCopyFailed, setBranchCopyFailed] = useState(false);
+    const [geminiKeyDraft, setGeminiKeyDraft] = useState('');
+    const [ollamaModels, setOllamaModels] = useState<string[]>(() => readCachedOllamaModels());
+    const [isUsingCustomOllamaModel, setIsUsingCustomOllamaModel] = useState(false);
+    const [ollamaModelCapabilitiesByKey, setOllamaModelCapabilitiesByKey] = useState<Record<string, OllamaModelCapabilities>>({});
+    const [isCheckingOllamaModelCapabilities, setIsCheckingOllamaModelCapabilities] = useState(false);
+    const [isLoadingOllamaModels, setIsLoadingOllamaModels] = useState(false);
     const [statusMessage, setStatusMessage] = useState<{ tone: 'error' | 'info'; text: string } | null>(null);
+    const selectedOllamaCapabilityKey = providerId === 'ollama' && ollamaBaseUrl.trim() && ollamaModel.trim()
+        ? ollamaCapabilityKey(ollamaBaseUrl, ollamaModel)
+        : null;
+    const selectedOllamaCapabilities = selectedOllamaCapabilityKey
+        ? ollamaModelCapabilitiesByKey[selectedOllamaCapabilityKey]
+        : undefined;
+    const ollamaSupportsImages = Boolean(selectedOllamaCapabilities?.supportsImages);
     const provider = useMemo<IProvider | null>(
-        () => apiKey ? createProvider(providerId, apiKey) : null,
-        [apiKey, providerId],
+        () => createProvider(providerId, {
+            apiKey,
+            ollamaBaseUrl: ollamaBaseUrl.trim(),
+            ollamaModel: ollamaModel.trim(),
+            ollamaSupportsImages,
+        }),
+        [apiKey, ollamaBaseUrl, ollamaModel, ollamaSupportsImages, providerId],
     );
+    const providerLabel = getProviderLabel(providerId);
+    const canAttachImages = Boolean(provider?.capabilities.supportsImages);
+    const canAttachRichFiles = Boolean(
+        provider?.id === 'gemini' &&
+        provider.capabilities.supportsFileAttachments &&
+        !isImageOnlyAttachmentMode(),
+    );
+    const canAttachFiles = canAttachImages || canAttachRichFiles;
+    const acceptedAttachmentTypes = useMemo(() => [
+        ...(canAttachImages ? SUPPORTED_IMAGE_TYPES : []),
+        ...(canAttachRichFiles ? [...SUPPORTED_PDF_TYPES, ...SUPPORTED_AUDIO_TYPES] : []),
+    ].join(','), [canAttachImages, canAttachRichFiles]);
+    const ollamaModelChoices = useMemo(() => (
+        Array.from(new Set(ollamaModels)).sort((left, right) => left.localeCompare(right))
+    ), [ollamaModels]);
     const scrollRef = useRef<HTMLDivElement>(null);
     const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
+    const latestOllamaModelRef = useRef(ollamaModel);
+    const ollamaAutoDetectBaseUrlRef = useRef<string | null>(null);
 
     const addAttachments = (parts: AttachmentPart[]) => {
         setAttachments((prev) => [...prev, ...parts]);
@@ -409,12 +509,151 @@ export function ChatView() {
         setStatusMessage({ tone, text });
     };
 
+    useEffect(() => {
+        latestOllamaModelRef.current = ollamaModel;
+    }, [ollamaModel]);
+
+    useEffect(() => {
+        const baseUrl = ollamaBaseUrl.trim();
+        if (providerId !== 'ollama' || !baseUrl || ollamaModel.trim()) return;
+        if (ollamaAutoDetectBaseUrlRef.current === baseUrl) return;
+
+        ollamaAutoDetectBaseUrlRef.current = baseUrl;
+        let cancelled = false;
+
+        setIsLoadingOllamaModels(true);
+        void listOllamaModels(baseUrl)
+            .then((models) => {
+                if (cancelled) return;
+
+                setOllamaModels(models);
+                writeCachedOllamaModels(models);
+
+                const preferredModel = choosePreferredOllamaModel(models);
+                if (!latestOllamaModelRef.current.trim() && preferredModel) {
+                    setOllamaModel(preferredModel);
+                    setIsUsingCustomOllamaModel(false);
+                    setStatusMessage({ tone: 'info', text: `Using local Ollama model: ${preferredModel}` });
+                    return;
+                }
+
+                if (models.length === 0) {
+                    setStatusMessage({
+                        tone: 'error',
+                        text: 'Ollama is reachable, but no local models were found. Pull a model or type one you already have.',
+                    });
+                }
+            })
+            .catch((err) => {
+                if (cancelled) return;
+                setStatusMessage({
+                    tone: 'error',
+                    text: err instanceof Error
+                        ? err.message
+                        : 'Unable to auto-detect Ollama models. Type a model name or refresh the list.',
+                });
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setIsLoadingOllamaModels(false);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [ollamaBaseUrl, ollamaModel, providerId, setOllamaModel]);
+
+    useEffect(() => {
+        const baseUrl = ollamaBaseUrl.trim();
+        const model = ollamaModel.trim();
+        if (providerId !== 'ollama' || !baseUrl || !model) {
+            setIsCheckingOllamaModelCapabilities(false);
+            return;
+        }
+
+        const key = ollamaCapabilityKey(baseUrl, model);
+        if (ollamaModelCapabilitiesByKey[key]) {
+            setIsCheckingOllamaModelCapabilities(false);
+            return;
+        }
+
+        const controller = new AbortController();
+        let cancelled = false;
+        setIsCheckingOllamaModelCapabilities(true);
+
+        void getOllamaModelCapabilities(baseUrl, model, controller.signal)
+            .then((capabilities) => {
+                if (cancelled) return;
+                setOllamaModelCapabilitiesByKey((prev) => ({
+                    ...prev,
+                    [key]: capabilities,
+                }));
+            })
+            .catch((err) => {
+                if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) return;
+                setOllamaModelCapabilitiesByKey((prev) => ({
+                    ...prev,
+                    [key]: {
+                        supportsImages: false,
+                        capabilities: [],
+                    },
+                }));
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setIsCheckingOllamaModelCapabilities(false);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+            controller.abort();
+        };
+    }, [ollamaBaseUrl, ollamaModel, ollamaModelCapabilitiesByKey, providerId]);
+
+    useEffect(() => {
+        setAttachments((prev) => prev.filter((attachment) =>
+            attachment.kind === 'image' ? canAttachImages : canAttachRichFiles,
+        ));
+    }, [canAttachImages, canAttachRichFiles]);
+
+    const handleProviderChange = (nextProviderId: ProviderId) => {
+        setProviderId(nextProviderId);
+        setAttachments([]);
+    };
+
+    const handleLoadOllamaModels = async () => {
+        setIsLoadingOllamaModels(true);
+        try {
+            const models = await listOllamaModels(ollamaBaseUrl.trim());
+            setOllamaModels(models);
+            writeCachedOllamaModels(models);
+            const preferredModel = choosePreferredOllamaModel(models);
+            if (!ollamaModel.trim() && preferredModel) {
+                setOllamaModel(preferredModel);
+                setIsUsingCustomOllamaModel(false);
+            } else if (ollamaModel.trim() && models.length > 0 && !models.includes(ollamaModel.trim())) {
+                setIsUsingCustomOllamaModel(true);
+                showStatus('error', `Current Ollama model "${ollamaModel.trim()}" was not found locally. Pick one from the suggestions or pull it first.`);
+                return;
+            }
+            showStatus('info', models.length > 0
+                ? `Found ${models.length} Ollama model${models.length === 1 ? '' : 's'}.`
+                : 'Ollama is reachable, but no local models were found.');
+        } catch (err) {
+            showStatus('error', err instanceof Error ? err.message : 'Unable to connect to Ollama.');
+        } finally {
+            setIsLoadingOllamaModels(false);
+        }
+    };
+
     const removeAttachment = (id: string) => {
         setAttachments((prev) => prev.filter((a) => a.id !== id));
     };
 
     const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-        if (!provider?.capabilities.supportsImages) return;
+        if (!canAttachImages) return;
         const hasImage = Array.from(e.clipboardData.items).some(
             (item) => item.kind === 'file' && item.type.startsWith('image/'),
         );
@@ -430,17 +669,18 @@ export function ChatView() {
     };
 
     const isAttachableFile = (type: string) =>
-        type.startsWith('image/') || (!isImageOnlyAttachmentMode() && (type === 'application/pdf' || type.startsWith('audio/')));
+        (canAttachImages && type.startsWith('image/')) ||
+        (canAttachRichFiles && (type === 'application/pdf' || type.startsWith('audio/')));
 
     const processAnyFile = (f: File, src: AttachmentPart['sourceType']) =>
-        f.type.startsWith('image/')
+        canAttachImages && f.type.startsWith('image/')
             ? processImageFile(f, src)
-            : isImageOnlyAttachmentMode()
-                ? Promise.resolve(null)
-                : processBinaryFile(f, src);
+            : canAttachRichFiles
+                ? processBinaryFile(f, src)
+                : Promise.resolve(null);
 
     const handleDragOver = (e: React.DragEvent) => {
-        if (!provider?.capabilities.supportsFileAttachments) return;
+        if (!canAttachFiles) return;
         if (Array.from(e.dataTransfer.items).some((item) => isAttachableFile(item.type))) {
             e.preventDefault();
             setIsDraggingOver(true);
@@ -450,7 +690,7 @@ export function ChatView() {
     const handleDragLeave = () => setIsDraggingOver(false);
 
     const handleDrop = async (e: React.DragEvent) => {
-        if (!provider?.capabilities.supportsFileAttachments) return;
+        if (!canAttachFiles) return;
         e.preventDefault();
         setIsDraggingOver(false);
         const files = Array.from(e.dataTransfer.files).filter((f) => isAttachableFile(f.type));
@@ -465,7 +705,7 @@ export function ChatView() {
     };
 
     const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (!provider?.capabilities.supportsFileAttachments) return;
+        if (!canAttachFiles) return;
         const files = Array.from(e.target.files ?? []);
         const parts = await Promise.all(files.map((f) => processAnyFile(f, 'file')));
         const validParts = parts.filter(Boolean) as AttachmentPart[];
@@ -697,6 +937,7 @@ export function ChatView() {
                 addNode({
                     parentId: userNodeId,
                     role: 'assistant',
+                    providerId,
                     content: assistantText,
                     events,
                     memoryPatches: patches,
@@ -716,6 +957,13 @@ export function ChatView() {
 
     const handleSend = async () => {
         if ((!input.trim() && attachments.length === 0) || !provider) return;
+        const unsupportedAttachments = attachments.filter((attachment) =>
+            attachment.kind === 'image' ? !canAttachImages : !canAttachRichFiles,
+        );
+        if (unsupportedAttachments.length > 0) {
+            showStatus('error', 'The selected provider or model does not support one or more attached files.');
+            return;
+        }
 
         const activeNode = path.length > 0 ? path[path.length - 1] : null;
         const parentId = activeNode?.role === 'user' ? activeNode.parentId : activeNodeId;
@@ -981,7 +1229,7 @@ export function ChatView() {
                                 ) : (
                                     <>
                                         <Cpu className="w-3 h-3 text-purple-500" />
-                                        <span className="text-xs font-semibold text-purple-600">Gemini</span>
+                                        <span className="text-xs font-semibold text-purple-600">{getProviderLabel(msg.providerId ?? 'gemini')}</span>
                                     </>
                                 )}
                             </div>
@@ -1082,7 +1330,7 @@ export function ChatView() {
                     <div className="flex flex-col max-w-[85%] mr-auto items-start">
                         <div className="flex items-center gap-2 mb-1 px-1">
                             <Cpu className="w-3 h-3 text-purple-500 animate-pulse" />
-                            <span className="text-xs font-semibold text-purple-600">Gemini</span>
+                            <span className="text-xs font-semibold text-purple-600">{providerLabel}</span>
                         </div>
                         <div className="p-4 rounded-2xl shadow-sm text-[15px] leading-relaxed relative bg-white border border-slate-200 text-slate-800 rounded-tl-sm w-full">
                             {streamingDisplayEvents.length > 0 ? (
@@ -1107,18 +1355,153 @@ export function ChatView() {
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
             >
+                <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Cpu className="h-4 w-4 text-slate-500" />
+                        <select
+                            value={providerId}
+                            onChange={(event) => handleProviderChange(event.target.value as ProviderId)}
+                            disabled={isTyping}
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none transition-colors focus:border-blue-400 disabled:opacity-50"
+                            title="Model provider"
+                        >
+                            <option value="gemini">Gemini</option>
+                            <option value="ollama">Ollama</option>
+                        </select>
+
+                        {providerId === 'gemini' ? (
+                            apiKey ? (
+                                <>
+                                    <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
+                                        API key set
+                                    </span>
+                                    <button
+                                        onClick={() => {
+                                            setApiKey('');
+                                            setGeminiKeyDraft('');
+                                        }}
+                                        disabled={isTyping}
+                                        className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700 disabled:opacity-50"
+                                    >
+                                        Change key
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    <KeyRound className="h-4 w-4 text-amber-600" />
+                                    <input
+                                        type="password"
+                                        value={geminiKeyDraft}
+                                        onChange={(event) => setGeminiKeyDraft(event.target.value)}
+                                        onKeyDown={(event) => {
+                                            if (event.key === 'Enter') {
+                                                setApiKey(geminiKeyDraft.trim());
+                                            }
+                                        }}
+                                        placeholder="Paste Gemini API key"
+                                        className="min-w-0 flex-1 rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-xs text-slate-700 outline-none transition-colors focus:border-amber-400"
+                                    />
+                                    <button
+                                        onClick={() => setApiKey(geminiKeyDraft.trim())}
+                                        disabled={!geminiKeyDraft.trim()}
+                                        className="rounded-lg bg-amber-600 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-amber-700 disabled:opacity-50"
+                                    >
+                                        Save
+                                    </button>
+                                </>
+                            )
+                        ) : (
+                            <>
+                                <input
+                                    value={ollamaBaseUrl}
+                                    onChange={(event) => setOllamaBaseUrl(event.target.value)}
+                                    disabled={isTyping}
+                                    className="min-w-[170px] rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 outline-none transition-colors focus:border-blue-400 disabled:opacity-50"
+                                    title="Ollama base URL"
+                                />
+                                {ollamaModelChoices.length > 0 && !isUsingCustomOllamaModel ? (
+                                    <>
+                                        <select
+                                            value={ollamaModelChoices.includes(ollamaModel.trim()) ? ollamaModel.trim() : ''}
+                                            onChange={(event) => setOllamaModel(event.target.value)}
+                                            disabled={isTyping}
+                                            className="min-w-[150px] rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 outline-none transition-colors focus:border-blue-400 disabled:opacity-50"
+                                            title="Ollama model"
+                                        >
+                                            <option value="" disabled>Select model</option>
+                                            {ollamaModelChoices.map((model) => (
+                                                <option key={model} value={model}>{model}</option>
+                                            ))}
+                                        </select>
+                                        <button
+                                            onClick={() => setIsUsingCustomOllamaModel(true)}
+                                            disabled={isTyping}
+                                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700 disabled:opacity-50"
+                                        >
+                                            Custom
+                                        </button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <input
+                                            value={ollamaModel}
+                                            onChange={(event) => setOllamaModel(event.target.value)}
+                                            disabled={isTyping}
+                                            placeholder="model name"
+                                            className="min-w-[130px] rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 outline-none transition-colors focus:border-blue-400 disabled:opacity-50"
+                                            title="Ollama model"
+                                        />
+                                        {ollamaModelChoices.length > 0 && (
+                                            <button
+                                                onClick={() => {
+                                                    if (!ollamaModelChoices.includes(ollamaModel.trim())) {
+                                                        setOllamaModel(ollamaModelChoices[0]);
+                                                    }
+                                                    setIsUsingCustomOllamaModel(false);
+                                                }}
+                                                disabled={isTyping}
+                                                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700 disabled:opacity-50"
+                                            >
+                                                Use list
+                                            </button>
+                                        )}
+                                    </>
+                                )}
+                                {ollamaModel.trim() && (
+                                    <span
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                                            isCheckingOllamaModelCapabilities
+                                                ? 'bg-slate-100 text-slate-500'
+                                                : ollamaSupportsImages
+                                                    ? 'bg-blue-50 text-blue-700'
+                                                    : 'bg-slate-100 text-slate-500'
+                                        }`}
+                                        title="Detected from Ollama model capabilities"
+                                    >
+                                        {isCheckingOllamaModelCapabilities
+                                            ? 'Checking'
+                                            : ollamaSupportsImages
+                                                ? 'Vision'
+                                                : 'Text only'}
+                                    </span>
+                                )}
+                                <button
+                                    onClick={() => void handleLoadOllamaModels()}
+                                    disabled={isTyping || isLoadingOllamaModels || !ollamaBaseUrl.trim()}
+                                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700 disabled:opacity-50"
+                                    title="Refresh local Ollama model suggestions"
+                                >
+                                    {isLoadingOllamaModels ? 'Refreshing...' : 'Refresh list'}
+                                </button>
+                            </>
+                        )}
+                    </div>
+                </div>
                 {!provider ? (
-                    <div className="flex items-center gap-2 bg-amber-50 rounded-xl p-3 border border-amber-200">
-                        <KeyRound className="w-4 h-4 text-amber-600" />
-                        <input
-                            type="password"
-                            placeholder="Paste Google Gemini API Key for MVP..."
-                            className="flex-1 bg-transparent text-sm outline-none text-slate-700"
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') setApiKey(e.currentTarget.value);
-                            }}
-                        />
-                        <button className="text-xs bg-amber-600 text-white px-2 py-1 rounded shadow-sm hover:bg-amber-700" onClick={(e) => setApiKey((e.currentTarget.previousElementSibling as HTMLInputElement).value)}>Save</button>
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                        {providerId === 'gemini'
+                            ? 'Add a Gemini API key to start chatting.'
+                            : 'Set an Ollama base URL and model name to start chatting.'}
                     </div>
                 ) : (
                     <div className="flex flex-col gap-2">
@@ -1201,11 +1584,11 @@ export function ChatView() {
 
                         <div className="flex items-end gap-2">
                             {/* Hidden file input */}
-                            {provider?.capabilities.supportsFileAttachments && (
+                            {canAttachFiles && (
                                 <input
                                     ref={fileInputRef}
                                     type="file"
-                                    accept={isImageOnlyAttachmentMode() ? 'image/jpeg,image/png,image/webp,image/gif' : 'image/jpeg,image/png,image/webp,image/gif,application/pdf,audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/webm,audio/flac'}
+                                    accept={acceptedAttachmentTypes}
                                     multiple
                                     className="hidden"
                                     onChange={handleFileSelect}
@@ -1213,9 +1596,11 @@ export function ChatView() {
                             )}
                             <button
                                 onClick={() => fileInputRef.current?.click()}
-                                disabled={isTyping || !provider?.capabilities.supportsFileAttachments}
+                                disabled={isTyping || !canAttachFiles}
                                 className="shrink-0 p-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-500 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 disabled:opacity-50 transition-colors"
-                                title={provider?.capabilities.supportsFileAttachments ? 'Attach file' : 'Current provider does not support file attachments'}
+                                title={canAttachFiles
+                                    ? (canAttachRichFiles ? 'Attach file' : 'Attach image')
+                                    : 'Current provider or model does not support attachments'}
                             >
                                 <Paperclip className="w-4 h-4" />
                             </button>
@@ -1233,11 +1618,11 @@ export function ChatView() {
                                 onPaste={handlePaste}
                                 disabled={isTyping}
                                 placeholder={
-                                    isDraggingOver ? 'Drop image here...' :
+                                    isDraggingOver ? (canAttachRichFiles ? 'Drop file here...' : 'Drop image here...') :
                                     !activeNodeId ? 'Start a new conversation...' :
                                     path[path.length - 1]?.role === 'user' ? 'Try an alternative prompt...' :
-                                    provider?.capabilities.supportsFileAttachments
-                                        ? (isImageOnlyAttachmentMode() ? 'Reply or attach an image...' : 'Reply, paste an image, or attach a file...')
+                                    canAttachFiles
+                                        ? (canAttachRichFiles ? 'Reply, paste an image, or attach a file...' : 'Reply or attach an image...')
                                         : 'Reply to this message...'
                                 }
                                 className="flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 pl-4 py-3.5 pr-4 text-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all shadow-inner disabled:opacity-50 overflow-y-auto"

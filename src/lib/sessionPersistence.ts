@@ -82,8 +82,16 @@ export function validatePersistedSession(data: unknown): PersistedSession {
         throw new Error('Session title must be a string when provided.');
     }
 
-    if ('providerId' in graph && graph.providerId !== 'gemini') {
+    if ('providerId' in graph && graph.providerId !== 'gemini' && graph.providerId !== 'ollama') {
         throw new Error(`Unsupported provider in session file: ${String(graph.providerId)}`);
+    }
+
+    if ('ollamaBaseUrl' in graph && graph.ollamaBaseUrl !== undefined && typeof graph.ollamaBaseUrl !== 'string') {
+        throw new Error('Ollama base URL must be a string when provided.');
+    }
+
+    if ('ollamaModel' in graph && graph.ollamaModel !== undefined && typeof graph.ollamaModel !== 'string') {
+        throw new Error('Ollama model must be a string when provided.');
     }
 
     return data as unknown as PersistedSession;

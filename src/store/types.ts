@@ -172,6 +172,7 @@ export interface MessageNode {
     parentIds?: string[];
     groupIds?: string[];
     kind?: 'message' | 'merge';
+    providerId?: ProviderId;
     role: 'user' | 'assistant' | 'system';
     content: string;
     attachments?: AttachmentPart[];
@@ -195,5 +196,7 @@ export interface ConversationGraph {
     sessionTitle?: string;
     providerId: ProviderId;
     apiKey: string | null;
+    ollamaBaseUrl: string;
+    ollamaModel: string;
     importEnvelope?: ImportedConversationEnvelope;
 }
